@@ -12,6 +12,7 @@ datasource db {
 
 model BotConfig {
   id                String   @id @default(cuid())
+  exchange          String   @default("KuCoin") // KuCoin or OANDA
   symbol            String   @default("BTC-USDT")
   fastMA            Int      @default(9)
   slowMA            Int      @default(21)
@@ -21,7 +22,8 @@ model BotConfig {
   takeProfitPips    Float    @default(75.0)
   maxDailyLoss      Float    @default(4.0)
   maxDailyProfit     Float    @default(8.0)
-  maxSpreadPips     Float    @default(3.0)
+  maxSpreadPips      Float    @default(3.0)
+  maxBalancePercent  Float    @default(50.0) // Max percentage of balance to use for trading
   allowBuy          Boolean  @default(true)
   allowSell         Boolean  @default(true)
   isActive          Boolean  @default(false)

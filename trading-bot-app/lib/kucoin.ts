@@ -108,14 +108,37 @@ export interface KucoinKline {
   volume: string
 }
 
-export class KucoinService {
+import type { ExchangeService, Account, Order, Kline, Ticker } from './exchange/interface'
+
+export class KucoinService implements ExchangeService {
+  getName(): string {
+    return 'KuCoin'
+  }
+
+  isSymbolSupported(symbol: string): boolean {
+    // KuCoin supports crypto pairs (e.g., BTC-USDT, ETH-USDT, etc.)
+    // Check if it matches crypto pattern
+    const cryptoPatterns = [
+      /-(USDT|BTC|ETH|BNB|BUSD|USDC|DAI|TUSD)$/i,
+      /^(BTC|ETH|LTC|XRP|ADA|DOT|SOL|MATIC|AVAX|LINK|UNI|ATOM)/i,
+    ]
+    return cryptoPatterns.some(pattern => pattern.test(symbol))
+  }
   // Get account balance
-  async getAccounts(currency?: string): Promise<KucoinAccount[]> {
+  async getAccounts(currency?: string): Promise<Account[]> {
     try {
       const response = await API.rest.User.Account.getAccountsList({
         currency,
       })
-      return response.data || []
+      const accounts: Account[] = (response.data || []).map((acc: KucoinAccount) => ({
+        id: acc.id,
+        currency: acc.currency,
+        type: acc.type,
+        balance: acc.balance,
+        available: acc.available,
+        holds: acc.holds,
+      }))
+      return accounts
     } catch (error: any) {
       console.error('Error fetching accounts:', error)
       // Re-throw with more context
@@ -141,19 +164,21 @@ export class KucoinService {
   // Get klines (candlestick data)
   async getKlines(
     symbol: string,
-    type: string = '4hour',
+    timeframe: string = '4hour',
     startAt?: number,
     endAt?: number
-  ): Promise<KucoinKline[]> {
+  ): Promise<Kline[]> {
     try {
       const response = await API.rest.Market.Histories.getMarketCandles(
         symbol,
-        type,
+        timeframe,
         { startAt, endAt }
       )
       // Klines are returned in reverse chronological order, and format is [time, open, close, high, low, volume]
       const klines = response.data || []
-      return klines.map((k: any[]) => ({
+      // Reverse to get chronological order (oldest first) for proper backtesting
+      const reversed = [...klines].reverse()
+      return reversed.map((k: any[]) => ({
         time: parseInt(k[0]),
         open: k[1],
         high: k[3],
@@ -171,7 +196,7 @@ export class KucoinService {
   }
 
   // Get ticker (current price)
-  async getTicker(symbol: string): Promise<{ price: string; bestAsk: string; bestBid: string }> {
+  async getTicker(symbol: string): Promise<Ticker> {
     try {
       const response = await API.rest.Market.Symbols.getTicker(symbol)
       return {
@@ -194,7 +219,7 @@ export class KucoinService {
     side: 'buy' | 'sell',
     size?: string,
     funds?: string
-  ): Promise<KucoinOrder> {
+  ): Promise<Order> {
     try {
       const response = await API.rest.Trade.Orders.postOrder({
         clientOid: `${Date.now()}`,
@@ -211,8 +236,41 @@ export class KucoinService {
     }
   }
 
+  // Place limit order
+  async placeLimitOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    price: string,
+    size: string
+  ): Promise<Order> {
+    try {
+      const response = await API.rest.Trade.Orders.postOrder({
+        clientOid: `${Date.now()}`,
+        side,
+        symbol,
+        type: 'limit',
+        price,
+        size,
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error placing limit order:', error)
+      throw error
+    }
+  }
+
+  // Cancel order
+  async cancelOrder(orderId: string): Promise<void> {
+    try {
+      await API.rest.Trade.Orders.cancelOrder({ orderId })
+    } catch (error) {
+      console.error('Error canceling order:', error)
+      throw error
+    }
+  }
+
   // Get order details
-  async getOrder(orderId: string): Promise<KucoinOrder> {
+  async getOrder(orderId: string): Promise<Order> {
     try {
       const response = await API.rest.Trade.Orders.getOrder({ orderId })
       return response.data
@@ -223,7 +281,7 @@ export class KucoinService {
   }
 
   // Get open orders
-  async getOpenOrders(symbol?: string): Promise<KucoinOrder[]> {
+  async getOpenOrders(symbol?: string): Promise<Order[]> {
     try {
       const response = await API.rest.Trade.Orders.getOrders({
         status: 'active',

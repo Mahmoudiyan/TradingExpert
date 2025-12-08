@@ -34,7 +34,13 @@ export interface BacktestTrade {
   takeProfit?: number
 }
 
-export type StrategyType = 'ema-only' | 'ema-rsi' | 'ema-rsi-trend'
+export type StrategyType = 
+  | 'ema-only' 
+  | 'ema-rsi' 
+  | 'ema-rsi-trend'
+  | 'mean-reversion'      // Bollinger Bands + RSI mean reversion
+  | 'momentum'            // Price momentum + volume
+  | 'multi-timeframe-trend' // Multi-timeframe trend confirmation
 
 export class BacktestService {
   // Calculate RSI (Relative Strength Index)
@@ -117,6 +123,82 @@ export class BacktestService {
     return ema
   }
 
+  // Calculate Bollinger Bands
+  private calculateBollingerBands(
+    klines: Kline[],
+    period: number = 20,
+    stdDev: number = 2
+  ): { upper: number[]; middle: number[]; lower: number[] } {
+    const closes = klines.map(k => parseFloat(k.close))
+    const upper: number[] = []
+    const middle: number[] = []
+    const lower: number[] = []
+    
+    if (klines.length < period) {
+      return { upper, middle, lower }
+    }
+    
+    for (let i = period - 1; i < closes.length; i++) {
+      const slice = closes.slice(i - period + 1, i + 1)
+      const sma = slice.reduce((a, b) => a + b, 0) / period
+      
+      // Calculate standard deviation
+      const variance = slice.reduce((sum, val) => sum + Math.pow(val - sma, 2), 0) / period
+      const sd = Math.sqrt(variance)
+      
+      middle.push(sma)
+      upper.push(sma + (sd * stdDev))
+      lower.push(sma - (sd * stdDev))
+    }
+    
+    // Pad beginning with zeros
+    const padding = new Array(period - 1).fill(0)
+    return {
+      upper: [...padding, ...upper],
+      middle: [...padding, ...middle],
+      lower: [...padding, ...lower],
+    }
+  }
+
+  // Calculate momentum (price change over period)
+  private calculateMomentum(klines: Kline[], period: number = 10): number[] {
+    const closes = klines.map(k => parseFloat(k.close))
+    const momentum: number[] = []
+    
+    for (let i = 0; i < closes.length; i++) {
+      if (i < period) {
+        momentum.push(0)
+      } else {
+        const change = ((closes[i] - closes[i - period]) / closes[i - period]) * 100
+        momentum.push(change)
+      }
+    }
+    
+    return momentum
+  }
+
+  // Calculate volume moving average
+  private calculateVolumeMA(klines: Kline[], period: number = 20): number[] {
+    const volumes = klines.map(k => parseFloat(k.volume))
+    const volumeMA: number[] = []
+    
+    if (klines.length < period) {
+      return new Array(klines.length).fill(0)
+    }
+    
+    for (let i = 0; i < volumes.length; i++) {
+      if (i < period - 1) {
+        volumeMA.push(0)
+      } else {
+        const slice = volumes.slice(i - period + 1, i + 1)
+        const avg = slice.reduce((a, b) => a + b, 0) / period
+        volumeMA.push(avg)
+      }
+    }
+    
+    return volumeMA
+  }
+
   // Calculate position size based on risk
   private calculatePositionSize(
     balance: number,
@@ -150,14 +232,15 @@ export class BacktestService {
     strategyType: StrategyType = 'ema-rsi',
     rsiPeriod: number = 14,
     rsiOverbought: number = 70,
-    rsiOversold: number = 30
+    rsiOversold: number = 30,
+    preferredExchange?: string
   ): Promise<BacktestResult> {
     // Get historical klines
     const startAt = Math.floor(startDate.getTime() / 1000)
     const endAt = Math.floor(endDate.getTime() / 1000)
     
-    // Select appropriate exchange based on symbol
-    const exchange = getExchangeForSymbol(symbol)
+    // Select appropriate exchange based on symbol (use preferred exchange if provided)
+    const exchange = getExchangeForSymbol(symbol, preferredExchange)
     
     let klines
     try {
@@ -168,21 +251,55 @@ export class BacktestService {
       throw new Error(`Failed to fetch data for ${symbol} from ${exchangeName}: ${errorMsg}. Please check if the symbol is available on ${exchangeName}.`)
     }
     
-    if (klines.length < slowMA + 2) {
-      throw new Error(`Not enough historical data for ${symbol}. Only ${klines.length} candles found, but ${slowMA + 2} are required.`)
+    // Determine minimum required data based on strategy
+    let minRequired = slowMA + 2
+    if (strategyType === 'mean-reversion') {
+      minRequired = Math.max(minRequired, 20 + 2) // Bollinger Bands needs 20 periods
+    } else if (strategyType === 'momentum') {
+      minRequired = Math.max(minRequired, 20 + 2) // Volume MA needs 20 periods
+    } else if (strategyType === 'multi-timeframe-trend') {
+      minRequired = Math.max(minRequired, Math.max(slowMA * 2, 50) + 2)
+    }
+    
+    if (klines.length < minRequired) {
+      throw new Error(`Not enough historical data for ${symbol}. Only ${klines.length} candles found, but ${minRequired} are required for ${strategyType} strategy.`)
     }
 
-    // Calculate EMAs
-    const fastEMA = this.calculateEMA(klines, fastMA)
-    const slowEMA = this.calculateEMA(klines, slowMA)
+    // Calculate indicators based on strategy type
+    const fastEMA = strategyType.includes('ema') || strategyType === 'multi-timeframe-trend'
+      ? this.calculateEMA(klines, fastMA)
+      : []
+    const slowEMA = strategyType.includes('ema') || strategyType === 'multi-timeframe-trend'
+      ? this.calculateEMA(klines, slowMA)
+      : []
     
     // Calculate RSI if strategy requires it
-    const rsi = strategyType !== 'ema-only' 
+    const rsi = (strategyType !== 'ema-only' && strategyType !== 'momentum')
       ? this.calculateRSI(klines, rsiPeriod)
       : []
     
+    // Calculate Bollinger Bands for mean reversion
+    const bb = strategyType === 'mean-reversion'
+      ? this.calculateBollingerBands(klines, 20, 2)
+      : { upper: [], middle: [], lower: [] }
+    
+    // Calculate momentum for momentum strategy
+    const momentum = strategyType === 'momentum'
+      ? this.calculateMomentum(klines, 10)
+      : []
+    
+    // Calculate volume MA for momentum strategy
+    const volumeMA = strategyType === 'momentum'
+      ? this.calculateVolumeMA(klines, 20)
+      : []
+    
+    // For multi-timeframe trend, use a longer EMA as trend filter
+    const trendEMA = strategyType === 'multi-timeframe-trend'
+      ? this.calculateEMA(klines, Math.max(slowMA * 2, 50))
+      : []
+    
     // Log strategy being used (for debugging)
-    console.log(`[Backtest] Strategy: ${strategyType}, RSI calculated: ${rsi.length > 0}, Klines: ${klines.length}`)
+    console.log(`[Backtest] Strategy: ${strategyType}, Klines: ${klines.length}`)
 
     let balance = initialBalance
     const trades: BacktestTrade[] = []
@@ -200,8 +317,18 @@ export class BacktestService {
     let maxDrawdownPercent = 0
     let signalsFiltered = 0 // Track how many EMA crossover signals were filtered by RSI
 
+    // Determine starting index based on strategy
+    let startIndex = slowMA
+    if (strategyType === 'mean-reversion') {
+      startIndex = Math.max(startIndex, 20) // Bollinger Bands
+    } else if (strategyType === 'momentum') {
+      startIndex = Math.max(startIndex, 20) // Volume MA
+    } else if (strategyType === 'multi-timeframe-trend') {
+      startIndex = Math.max(startIndex, Math.max(slowMA * 2, 50))
+    }
+    
     // Process each candle
-    for (let i = slowMA; i < klines.length; i++) {
+    for (let i = startIndex; i < klines.length; i++) {
       const currentPrice = parseFloat(klines[i].close)
       const currentTime = klines[i].time * 1000
 
@@ -236,19 +363,41 @@ export class BacktestService {
           }
         }
 
-        // Check for signal reversal (opposite crossover)
+        // Check for signal reversal based on strategy
         if (!shouldClose && i > 0) {
-          const prevFast = fastEMA[i - 1]
-          const prevSlow = slowEMA[i - 1]
-          const currFast = fastEMA[i]
-          const currSlow = slowEMA[i]
+          if (strategyType === 'ema-only' || strategyType === 'ema-rsi' || strategyType === 'ema-rsi-trend' || strategyType === 'multi-timeframe-trend') {
+            const prevFast = fastEMA[i - 1] || 0
+            const prevSlow = slowEMA[i - 1] || 0
+            const currFast = fastEMA[i] || 0
+            const currSlow = slowEMA[i] || 0
 
-          if (side === 'buy' && prevFast >= prevSlow && currFast < currSlow) {
-            shouldClose = true
-            exitReason = 'signal reversal'
-          } else if (side === 'sell' && prevFast <= prevSlow && currFast > currSlow) {
-            shouldClose = true
-            exitReason = 'signal reversal'
+            if (side === 'buy' && prevFast >= prevSlow && currFast < currSlow) {
+              shouldClose = true
+              exitReason = 'signal reversal'
+            } else if (side === 'sell' && prevFast <= prevSlow && currFast > currSlow) {
+              shouldClose = true
+              exitReason = 'signal reversal'
+            }
+          } else if (strategyType === 'mean-reversion') {
+            // Close mean reversion trades when price returns to middle band
+            const bbMiddle = bb.middle[i] || currentPrice
+            if (side === 'buy' && currentPrice >= bbMiddle) {
+              shouldClose = true
+              exitReason = 'mean reversion target'
+            } else if (side === 'sell' && currentPrice <= bbMiddle) {
+              shouldClose = true
+              exitReason = 'mean reversion target'
+            }
+          } else if (strategyType === 'momentum') {
+            // Close momentum trades when momentum reverses
+            const currentMomentum = i < momentum.length ? momentum[i] : 0
+            if (side === 'buy' && currentMomentum < 0) {
+              shouldClose = true
+              exitReason = 'momentum reversal'
+            } else if (side === 'sell' && currentMomentum > 0) {
+              shouldClose = true
+              exitReason = 'momentum reversal'
+            }
           }
         }
 
@@ -257,11 +406,16 @@ export class BacktestService {
           let profit = 0
           if (side === 'buy') {
             profit = (exitPrice - entryPrice) * size
+            // For buy positions: we reserved entryPrice * size, now we get back exitPrice * size
+            // This equals: entryPrice * size (capital returned) + profit
+            balance += exitPrice * size
           } else {
+            // For sell (short) positions: we received entryPrice * size when opening
+            // Now we pay exitPrice * size to close, profit is the difference
             profit = (entryPrice - exitPrice) * size
+            balance -= exitPrice * size
           }
 
-          balance += profit
           const profitPercent = (profit / (entryPrice * size)) * 100
 
           trades.push({
@@ -284,44 +438,111 @@ export class BacktestService {
         // Look for new entry signal
         if (i === 0) continue
 
-        const prevFast = fastEMA[i - 1]
-        const prevSlow = slowEMA[i - 1]
-        const currFast = fastEMA[i]
-        const currSlow = slowEMA[i]
+        let buySignal = false
+        let sellSignal = false
 
-        // Buy signal: fast MA crosses above slow MA
-        const emaCrossUp = prevFast <= prevSlow && currFast > currSlow
-        let buySignal = emaCrossUp
-        
-        // Apply RSI filter if strategy requires it
-        if (emaCrossUp && (strategyType === 'ema-rsi' || strategyType === 'ema-rsi-trend')) {
-          if (rsi.length === 0) {
-            // RSI not available, skip this signal
-            buySignal = false
-            signalsFiltered++
-          } else {
-            const currentRSI = i < rsi.length ? rsi[i] : 50
-            const prevRSI = i > 0 && (i - 1) < rsi.length ? rsi[i - 1] : 50
-            
-            // Add RSI confirmation: RSI should not be overbought for buy signals
-            // For buy: RSI should be below overbought level (not buying at the top)
-            const rsiCondition = currentRSI < rsiOverbought
-            
-            // Optional: RSI momentum confirmation for trend strategy
-            const rsiMomentum = strategyType === 'ema-rsi-trend' 
-              ? (currentRSI > prevRSI || currentRSI < 50) // Rising RSI or neutral
-              : true // No momentum requirement for ema-rsi
-            
-            if (!rsiCondition || !rsiMomentum) {
+        // Strategy-specific signal generation
+        if (strategyType === 'ema-only' || strategyType === 'ema-rsi' || strategyType === 'ema-rsi-trend') {
+          const prevFast = fastEMA[i - 1] || 0
+          const prevSlow = slowEMA[i - 1] || 0
+          const currFast = fastEMA[i] || 0
+          const currSlow = slowEMA[i] || 0
+
+          // Buy signal: fast MA crosses above slow MA
+          const emaCrossUp = prevFast <= prevSlow && currFast > currSlow
+          buySignal = emaCrossUp
+          
+          // Apply RSI filter if strategy requires it
+          if (emaCrossUp && (strategyType === 'ema-rsi' || strategyType === 'ema-rsi-trend')) {
+            if (rsi.length === 0) {
+              buySignal = false
               signalsFiltered++
+            } else {
+              const currentRSI = i < rsi.length ? rsi[i] : 50
+              const prevRSI = i > 0 && (i - 1) < rsi.length ? rsi[i - 1] : 50
+              
+              const rsiCondition = currentRSI < rsiOverbought
+              const rsiMomentum = strategyType === 'ema-rsi-trend' 
+                ? (currentRSI > prevRSI || currentRSI < 50)
+                : true
+              
+              if (!rsiCondition || !rsiMomentum) {
+                signalsFiltered++
+              }
+              buySignal = buySignal && rsiCondition && rsiMomentum
             }
-            buySignal = buySignal && rsiCondition && rsiMomentum
           }
+          
+          // Sell signal: fast MA crosses below slow MA
+          const emaCrossDown = prevFast >= prevSlow && currFast < currSlow
+          sellSignal = emaCrossDown
+          
+          if (emaCrossDown && (strategyType === 'ema-rsi' || strategyType === 'ema-rsi-trend')) {
+            if (rsi.length === 0) {
+              sellSignal = false
+              signalsFiltered++
+            } else {
+              const currentRSI = i < rsi.length ? rsi[i] : 50
+              const prevRSI = i > 0 && (i - 1) < rsi.length ? rsi[i - 1] : 50
+              
+              const rsiCondition = currentRSI > rsiOversold
+              const rsiMomentum = strategyType === 'ema-rsi-trend'
+                ? (currentRSI < prevRSI || currentRSI > 50)
+                : true
+              
+              if (!rsiCondition || !rsiMomentum) {
+                signalsFiltered++
+              }
+              sellSignal = sellSignal && rsiCondition && rsiMomentum
+            }
+          }
+        } else if (strategyType === 'mean-reversion') {
+          // Mean reversion: Buy when price touches lower BB and RSI is oversold
+          // Sell when price touches upper BB and RSI is overbought
+          const bbUpper = bb.upper[i] || currentPrice
+          const bbLower = bb.lower[i] || currentPrice
+          const bbMiddle = bb.middle[i] || currentPrice
+          const currentRSI = i < rsi.length ? rsi[i] : 50
+          
+          // Buy signal: price near lower band and RSI oversold
+          const priceNearLower = currentPrice <= bbLower * 1.01 // Within 1% of lower band
+          buySignal = priceNearLower && currentRSI < rsiOversold
+          
+          // Sell signal: price near upper band and RSI overbought
+          const priceNearUpper = currentPrice >= bbUpper * 0.99 // Within 1% of upper band
+          sellSignal = priceNearUpper && currentRSI > rsiOverbought
+        } else if (strategyType === 'momentum') {
+          // Momentum: Buy when momentum is positive and volume is above average
+          // Sell when momentum is negative and volume is above average
+          const currentMomentum = i < momentum.length ? momentum[i] : 0
+          const currentVolume = parseFloat(klines[i].volume)
+          const avgVolume = i < volumeMA.length ? volumeMA[i] : currentVolume
+          
+          // Buy signal: positive momentum with volume confirmation
+          buySignal = currentMomentum > 2 && currentVolume > avgVolume * 1.2
+          
+          // Sell signal: negative momentum with volume confirmation
+          sellSignal = currentMomentum < -2 && currentVolume > avgVolume * 1.2
+        } else if (strategyType === 'multi-timeframe-trend') {
+          // Multi-timeframe: Use longer EMA as trend filter, shorter EMAs for entry
+          const prevFast = fastEMA[i - 1] || 0
+          const prevSlow = slowEMA[i - 1] || 0
+          const currFast = fastEMA[i] || 0
+          const currSlow = slowEMA[i] || 0
+          const trendValue = i < trendEMA.length ? trendEMA[i] : currentPrice
+          
+          // Buy signal: fast crosses above slow AND price is above trend EMA (uptrend)
+          const emaCrossUp = prevFast <= prevSlow && currFast > currSlow
+          buySignal = emaCrossUp && currentPrice > trendValue
+          
+          // Sell signal: fast crosses below slow AND price is below trend EMA (downtrend)
+          const emaCrossDown = prevFast >= prevSlow && currFast < currSlow
+          sellSignal = emaCrossDown && currentPrice < trendValue
         }
         
+        // Execute buy signal
         if (allowBuy && buySignal) {
           const entryPrice = currentPrice
-          // Calculate stop loss as percentage (assuming stopLossPips is in basis points, e.g., 100 = 1%)
           const stopLossPercent = stopLossPips / 10000
           const stopLossPrice = entryPrice * (1 - stopLossPercent)
           const takeProfitPercent = takeProfitPips / 10000
@@ -337,43 +558,13 @@ export class BacktestService {
               stopLoss: stopLossPrice,
               takeProfit: takeProfitPrice,
             }
-            balance -= entryPrice * size // Reserve funds
+            balance -= entryPrice * size
           }
         }
         
-        // Sell signal: fast MA crosses below slow MA
-        const emaCrossDown = prevFast >= prevSlow && currFast < currSlow
-        let sellSignal = emaCrossDown
-        
-        // Apply RSI filter if strategy requires it
-        if (emaCrossDown && (strategyType === 'ema-rsi' || strategyType === 'ema-rsi-trend')) {
-          if (rsi.length === 0) {
-            // RSI not available, skip this signal
-            sellSignal = false
-            signalsFiltered++
-          } else {
-            const currentRSI = i < rsi.length ? rsi[i] : 50
-            const prevRSI = i > 0 && (i - 1) < rsi.length ? rsi[i - 1] : 50
-            
-            // Add RSI confirmation: RSI should not be oversold for sell signals
-            // For sell: RSI should be above oversold level (not selling at the bottom)
-            const rsiCondition = currentRSI > rsiOversold
-            
-            // Optional: RSI momentum confirmation for trend strategy
-            const rsiMomentum = strategyType === 'ema-rsi-trend'
-              ? (currentRSI < prevRSI || currentRSI > 50) // Falling RSI or neutral
-              : true // No momentum requirement for ema-rsi
-            
-            if (!rsiCondition || !rsiMomentum) {
-              signalsFiltered++
-            }
-            sellSignal = sellSignal && rsiCondition && rsiMomentum
-          }
-        }
-        
+        // Execute sell signal
         if (allowSell && sellSignal) {
           const entryPrice = currentPrice
-          // Calculate stop loss as percentage (for sell, stop loss is above entry)
           const stopLossPercent = stopLossPips / 10000
           const stopLossPrice = entryPrice * (1 + stopLossPercent)
           const takeProfitPercent = takeProfitPips / 10000
@@ -389,7 +580,7 @@ export class BacktestService {
               stopLoss: stopLossPrice,
               takeProfit: takeProfitPrice,
             }
-            balance -= entryPrice * size // Reserve funds
+            balance += entryPrice * size
           }
         }
       }
@@ -414,11 +605,14 @@ export class BacktestService {
       let profit = 0
       if (side === 'buy') {
         profit = (lastPrice - entryPrice) * size
+        // For buy positions: return capital + profit
+        balance += lastPrice * size
       } else {
         profit = (entryPrice - lastPrice) * size
+        // For sell (short) positions: pay to close the position
+        balance -= lastPrice * size
       }
 
-      balance += profit
       const profitPercent = (profit / (entryPrice * size)) * 100
 
       trades.push({

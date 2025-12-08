@@ -7,6 +7,7 @@ export async function POST(request: Request) {
     
     const {
       symbol,
+      exchange,
       timeframe,
       startDate,
       endDate,
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const finalStrategyType = (strategyType || 'ema-rsi') as 'ema-only' | 'ema-rsi' | 'ema-rsi-trend'
+    const finalStrategyType = (strategyType || 'ema-rsi') as 'ema-only' | 'ema-rsi' | 'ema-rsi-trend' | 'mean-reversion' | 'momentum' | 'multi-timeframe-trend'
     
     console.log(`[Backtest API] Strategy: ${finalStrategyType}, Symbol: ${symbol}, RSI Period: ${rsiPeriod || 14}`)
     
@@ -51,7 +52,8 @@ export async function POST(request: Request) {
       finalStrategyType,
       rsiPeriod || 14,
       rsiOverbought || 70,
-      rsiOversold || 30
+      rsiOversold || 30,
+      exchange
     )
 
     return NextResponse.json(result)

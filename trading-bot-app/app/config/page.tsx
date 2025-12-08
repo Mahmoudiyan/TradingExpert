@@ -9,10 +9,11 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Combobox } from '@/components/ui/combobox'
-import { POPULAR_SYMBOLS } from '@/lib/symbols'
+import { getSymbolsByExchange } from '@/lib/symbols'
 
 interface BotConfig {
   id?: string
+  exchange?: string
   symbol: string
   fastMA: number
   slowMA: number
@@ -23,9 +24,11 @@ interface BotConfig {
   maxDailyLoss: number
   maxDailyProfit: number
   maxSpreadPips: number
+  maxBalancePercent?: number
   allowBuy: boolean
   allowSell: boolean
   isActive: boolean
+  strategyType?: 'ema-only' | 'ema-rsi' | 'ema-rsi-trend' | 'mean-reversion' | 'momentum' | 'multi-timeframe-trend'
 }
 
 export default function ConfigPage() {
@@ -69,6 +72,7 @@ export default function ConfigPage() {
   }
 
   const defaultConfig: BotConfig = {
+    exchange: 'KuCoin',
     symbol: 'BTC-USDT',
     fastMA: 9,
     slowMA: 21,
@@ -79,9 +83,11 @@ export default function ConfigPage() {
     maxDailyLoss: 4.0,
     maxDailyProfit: 8.0,
     maxSpreadPips: 3.0,
+    maxBalancePercent: 50.0,
     allowBuy: true,
     allowSell: true,
     isActive: false,
+    strategyType: 'ema-rsi',
   }
 
   if (loading) {
@@ -124,6 +130,22 @@ export default function ConfigPage() {
 
 function ConfigForm({ config, onSave, saving }: { config: BotConfig; onSave: (config: BotConfig) => void; saving: boolean }) {
   const [formData, setFormData] = useState<BotConfig>(config)
+  
+  // Get symbols filtered by selected exchange
+  const availableSymbols = getSymbolsByExchange(formData.exchange || 'KuCoin')
+  
+  // Reset symbol if it's not available in the selected exchange
+  const handleExchangeChange = (exchange: string) => {
+    const newSymbols = getSymbolsByExchange(exchange)
+    const currentSymbol = formData.symbol
+    const isSymbolAvailable = newSymbols.some(s => s.value === currentSymbol)
+    
+    setFormData({
+      ...formData,
+      exchange,
+      symbol: isSymbolAvailable ? currentSymbol : (newSymbols[0]?.value || ''),
+    })
+  }
 
   return (
     <Card>
@@ -141,13 +163,35 @@ function ConfigForm({ config, onSave, saving }: { config: BotConfig; onSave: (co
         >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
+              <Label htmlFor="exchange">Exchange</Label>
+              <Select
+                value={formData.exchange || 'KuCoin'}
+                onValueChange={handleExchangeChange}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="KuCoin">KuCoin (Crypto)</SelectItem>
+                  <SelectItem value="OANDA">OANDA (Forex)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Select the exchange to use for trading
+              </p>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="symbol">Symbol</Label>
               <Combobox
-                options={POPULAR_SYMBOLS}
+                options={availableSymbols}
                 value={formData.symbol}
                 onValueChange={(value) => setFormData({ ...formData, symbol: value })}
                 placeholder="Search or select symbol..."
               />
+              <p className="text-xs text-muted-foreground">
+                Symbols filtered by selected exchange
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -169,6 +213,29 @@ function ConfigForm({ config, onSave, saving }: { config: BotConfig; onSave: (co
                   <SelectItem value="1day">1 Day</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="strategyType">Strategy (for backtesting)</Label>
+              <Select
+                value={formData.strategyType || 'ema-rsi'}
+                onValueChange={(value) => setFormData({ ...formData, strategyType: value as BotConfig['strategyType'] })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ema-only">EMA Crossover Only</SelectItem>
+                  <SelectItem value="ema-rsi">EMA + RSI Filter</SelectItem>
+                  <SelectItem value="ema-rsi-trend">EMA + RSI + Trend</SelectItem>
+                  <SelectItem value="mean-reversion">Mean Reversion (Bollinger Bands + RSI)</SelectItem>
+                  <SelectItem value="momentum">Momentum (Price + Volume)</SelectItem>
+                  <SelectItem value="multi-timeframe-trend">Multi-Timeframe Trend</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Note: Strategy selection is primarily for backtesting. Live trading currently uses EMA crossover.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -255,6 +322,22 @@ function ConfigForm({ config, onSave, saving }: { config: BotConfig; onSave: (co
                 value={formData.maxSpreadPips}
                 onChange={(e) => setFormData({ ...formData, maxSpreadPips: parseFloat(e.target.value) })}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="maxBalancePercent">Max Balance for Trading (%)</Label>
+              <Input
+                id="maxBalancePercent"
+                type="number"
+                step="1"
+                min="10"
+                max="100"
+                value={formData.maxBalancePercent || 50}
+                onChange={(e) => setFormData({ ...formData, maxBalancePercent: parseFloat(e.target.value) })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Percentage of total account balance to allocate for trading (10-100%)
+              </p>
             </div>
           </div>
 

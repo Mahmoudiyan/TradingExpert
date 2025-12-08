@@ -27,12 +27,34 @@ function isCryptoSymbol(symbol: string): boolean {
 }
 
 /**
- * Get the appropriate exchange service for a given symbol
- * @param symbol - Trading symbol (e.g., 'EUR-USD', 'BTC-USDT')
+ * Get exchange service by name
+ * @param exchangeName - Exchange name ('KuCoin' or 'OANDA')
  * @returns ExchangeService instance
  */
-export function getExchangeForSymbol(symbol: string): ExchangeService {
-  // Check if it's a forex pair
+export function getExchangeByName(exchangeName: string): ExchangeService {
+  if (exchangeName === 'OANDA') {
+    return oandaService
+  }
+  return kucoinService
+}
+
+/**
+ * Get the appropriate exchange service for a given symbol
+ * @param symbol - Trading symbol (e.g., 'EUR-USD', 'BTC-USDT')
+ * @param preferredExchange - Optional preferred exchange ('KuCoin' or 'OANDA')
+ * @returns ExchangeService instance
+ */
+export function getExchangeForSymbol(symbol: string, preferredExchange?: string): ExchangeService {
+  // If preferred exchange is specified, use it
+  if (preferredExchange) {
+    const exchange = getExchangeByName(preferredExchange)
+    if (exchange.isSymbolSupported(symbol)) {
+      console.log(`[Exchange Router] Using ${preferredExchange} for symbol: ${symbol}`)
+      return exchange
+    }
+  }
+  
+  // Otherwise, auto-detect based on symbol
   if (isForexSymbol(symbol)) {
     if (oandaService.isSymbolSupported(symbol)) {
       console.log(`[Exchange Router] Using OANDA for forex symbol: ${symbol}`)
@@ -42,7 +64,7 @@ export function getExchangeForSymbol(symbol: string): ExchangeService {
   
   // Default to KuCoin for crypto or if forex not available
   console.log(`[Exchange Router] Using KuCoin for symbol: ${symbol}`)
-  return kucoinService as unknown as ExchangeService
+  return kucoinService
 }
 
 /**

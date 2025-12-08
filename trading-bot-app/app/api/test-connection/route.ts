@@ -6,11 +6,24 @@ import { oandaService } from '@/lib/exchange/oanda'
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
-    const symbol = searchParams.get('symbol') || 'BTC-USDT' // Default to crypto
+    const exchangeParam = searchParams.get('exchange') // 'KuCoin' or 'OANDA'
+    const symbol = searchParams.get('symbol') || (exchangeParam === 'OANDA' ? 'EUR-USD' : 'BTC-USDT')
     
-    // Detect which exchange to test based on symbol
-    const exchange = getExchangeForSymbol(symbol)
-    const exchangeName = getExchangeName(symbol)
+    // Use specified exchange or auto-detect
+    let exchange
+    let exchangeName
+    
+    if (exchangeParam === 'OANDA') {
+      exchange = oandaService
+      exchangeName = 'OANDA'
+    } else if (exchangeParam === 'KuCoin') {
+      exchange = kucoinService
+      exchangeName = 'KuCoin'
+    } else {
+      // Fallback to auto-detection
+      exchange = getExchangeForSymbol(symbol)
+      exchangeName = getExchangeName(symbol)
+    }
     
     // Check credentials based on exchange
     if (exchangeName === 'OANDA') {

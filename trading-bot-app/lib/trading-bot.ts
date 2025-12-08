@@ -44,10 +44,10 @@ export class TradingBot {
   }
 
   // Get trading signal
-  async getSignal(symbol: string, fastMA: number, slowMA: number, timeframe: string): Promise<TradingSignal> {
+  async getSignal(symbol: string, fastMA: number, slowMA: number, timeframe: string, preferredExchange?: string): Promise<TradingSignal> {
     try {
-      // Get appropriate exchange for symbol
-      const exchange = getExchangeForSymbol(symbol)
+      // Get appropriate exchange for symbol (use preferred exchange if provided)
+      const exchange = getExchangeForSymbol(symbol, preferredExchange)
       
       // Get klines (need enough for slow MA + 2 for comparison)
       const klines = await exchange.getKlines(symbol, timeframe)
@@ -100,9 +100,9 @@ export class TradingBot {
   }
 
   // Check if spread is acceptable
-  async checkSpread(symbol: string, maxSpreadPercent: number): Promise<boolean> {
+  async checkSpread(symbol: string, maxSpreadPercent: number, preferredExchange?: string): Promise<boolean> {
     try {
-      const exchange = getExchangeForSymbol(symbol)
+      const exchange = getExchangeForSymbol(symbol, preferredExchange)
       const ticker = await exchange.getTicker(symbol)
       const ask = parseFloat(ticker.bestAsk)
       const bid = parseFloat(ticker.bestBid)
@@ -123,7 +123,7 @@ export class TradingBot {
     config: any
   ) {
     try {
-      const exchange = getExchangeForSymbol(symbol)
+      const exchange = getExchangeForSymbol(symbol, config.exchange)
       const order = await exchange.placeMarketOrder(
         symbol,
         side,
@@ -208,7 +208,8 @@ export class TradingBot {
         config.symbol,
         config.fastMA,
         config.slowMA,
-        config.timeframe
+        config.timeframe,
+        config.exchange
       )
 
       if (signal.signal === 'none') {
@@ -227,7 +228,7 @@ export class TradingBot {
       }
 
       // Check spread
-      const spreadOK = await this.checkSpread(config.symbol, config.maxSpreadPips)
+      const spreadOK = await this.checkSpread(config.symbol, config.maxSpreadPips, config.exchange)
       if (!spreadOK) {
         await prisma.botLog.create({
           data: {
@@ -240,7 +241,7 @@ export class TradingBot {
       }
 
       // Get balance
-      const exchange = getExchangeForSymbol(config.symbol)
+      const exchange = getExchangeForSymbol(config.symbol, config.exchange)
       // For forex, use the quote currency; for crypto, use the quote currency (e.g., USDT)
       const baseCurrency = config.symbol.split('-')[1] || config.symbol.split('_')[1] || 'USD'
       const balance = await exchange.getBalance(baseCurrency)

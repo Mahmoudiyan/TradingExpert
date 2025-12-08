@@ -1,8 +1,5 @@
-// Popular trading symbols - system will automatically use the right exchange:
-// - Forex pairs -> OANDA
-// - Crypto pairs -> KuCoin
-export const POPULAR_SYMBOLS = [
-  // Forex Major Pairs (Supported by OANDA)
+// Trading symbols organized by exchange
+export const FOREX_SYMBOLS = [
   { value: 'EUR-USD', label: 'Euro / US Dollar (EUR/USD)' },
   { value: 'GBP-USD', label: 'British Pound / US Dollar (GBP/USD)' },
   { value: 'USD-JPY', label: 'US Dollar / Japanese Yen (USD/JPY)' },
@@ -23,7 +20,9 @@ export const POPULAR_SYMBOLS = [
   { value: 'AUD-NZD', label: 'Australian Dollar / New Zealand Dollar (AUD/NZD)' },
   { value: 'CAD-JPY', label: 'Canadian Dollar / Japanese Yen (CAD/JPY)' },
   { value: 'CHF-JPY', label: 'Swiss Franc / Japanese Yen (CHF/JPY)' },
-  // Crypto Pairs (Supported by KuCoin)
+]
+
+export const CRYPTO_SYMBOLS = [
   { value: 'BTC-USDT', label: 'Bitcoin (BTC/USDT)' },
   { value: 'ETH-USDT', label: 'Ethereum (ETH/USDT)' },
   { value: 'BNB-USDT', label: 'Binance Coin (BNB/USDT)' },
@@ -45,4 +44,17 @@ export const POPULAR_SYMBOLS = [
   { value: 'TRX-USDT', label: 'TRON (TRX/USDT)' },
   { value: 'EOS-USDT', label: 'EOS (EOS/USDT)' },
 ]
+
+// All symbols for backward compatibility
+export const POPULAR_SYMBOLS = [...FOREX_SYMBOLS, ...CRYPTO_SYMBOLS]
+
+// Get symbols by exchange
+export function getSymbolsByExchange(exchange: string) {
+  if (exchange === 'OANDA') {
+    return FOREX_SYMBOLS
+  } else if (exchange === 'KuCoin') {
+    return CRYPTO_SYMBOLS
+  }
+  return POPULAR_SYMBOLS
+}
 

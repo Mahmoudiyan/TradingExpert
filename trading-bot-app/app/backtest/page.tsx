@@ -11,7 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Combobox } from '@/components/ui/combobox'
-import { POPULAR_SYMBOLS } from '@/lib/symbols'
+import { getSymbolsByExchange } from '@/lib/symbols'
 
 interface BacktestResult {
   startDate: string
@@ -48,6 +48,7 @@ export default function BacktestPage() {
   const [result, setResult] = useState<BacktestResult | null>(null)
 
   const [formData, setFormData] = useState({
+    exchange: 'KuCoin',
     symbol: 'BTC-USDT',
     timeframe: '4hour',
     startDate: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 90 days ago
@@ -60,7 +61,7 @@ export default function BacktestPage() {
     initialBalance: 10000,
     allowBuy: true,
     allowSell: true,
-    strategyType: 'ema-rsi' as 'ema-only' | 'ema-rsi' | 'ema-rsi-trend',
+    strategyType: 'ema-rsi' as 'ema-only' | 'ema-rsi' | 'ema-rsi-trend' | 'mean-reversion' | 'momentum' | 'multi-timeframe-trend',
     rsiPeriod: 14,
     rsiOverbought: 70,
     rsiOversold: 30,
@@ -76,6 +77,7 @@ export default function BacktestPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
+          exchange: formData.exchange,
           startDate: new Date(formData.startDate).toISOString(),
           endDate: new Date(formData.endDate).toISOString(),
           strategyType: formData.strategyType,
@@ -119,13 +121,42 @@ export default function BacktestPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
+                  <Label htmlFor="exchange">Exchange</Label>
+                  <Select
+                    value={formData.exchange}
+                    onValueChange={(value) => {
+                      const symbols = getSymbolsByExchange(value)
+                      setFormData({
+                        ...formData,
+                        exchange: value,
+                        symbol: symbols[0]?.value || '',
+                      })
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="KuCoin">KuCoin (Crypto)</SelectItem>
+                      <SelectItem value="OANDA">OANDA (Forex)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Select the exchange to use for backtesting
+                  </p>
+                </div>
+
+                <div className="space-y-2">
                   <Label htmlFor="symbol">Symbol</Label>
                   <Combobox
-                    options={POPULAR_SYMBOLS}
+                    options={getSymbolsByExchange(formData.exchange)}
                     value={formData.symbol}
                     onValueChange={(value) => setFormData({ ...formData, symbol: value })}
                     placeholder="Search or select symbol..."
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Symbols filtered by selected exchange
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -153,7 +184,7 @@ export default function BacktestPage() {
                   <Label htmlFor="strategyType">Strategy</Label>
                   <Select
                     value={formData.strategyType}
-                    onValueChange={(value) => setFormData({ ...formData, strategyType: value as 'ema-only' | 'ema-rsi' | 'ema-rsi-trend' })}
+                    onValueChange={(value) => setFormData({ ...formData, strategyType: value as 'ema-only' | 'ema-rsi' | 'ema-rsi-trend' | 'mean-reversion' | 'momentum' | 'multi-timeframe-trend' })}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -162,12 +193,18 @@ export default function BacktestPage() {
                       <SelectItem value="ema-only">EMA Crossover Only</SelectItem>
                       <SelectItem value="ema-rsi">EMA + RSI Filter</SelectItem>
                       <SelectItem value="ema-rsi-trend">EMA + RSI + Trend</SelectItem>
+                      <SelectItem value="mean-reversion">Mean Reversion (Bollinger Bands + RSI)</SelectItem>
+                      <SelectItem value="momentum">Momentum (Price + Volume)</SelectItem>
+                      <SelectItem value="multi-timeframe-trend">Multi-Timeframe Trend</SelectItem>
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     {formData.strategyType === 'ema-only' && 'Simple EMA crossover - can produce many false signals'}
                     {formData.strategyType === 'ema-rsi' && 'EMA crossover filtered by RSI - reduces false signals'}
                     {formData.strategyType === 'ema-rsi-trend' && 'EMA + RSI with trend confirmation - most conservative'}
+                    {formData.strategyType === 'mean-reversion' && 'Buy oversold, sell overbought - works best in ranging markets'}
+                    {formData.strategyType === 'momentum' && 'Follows strong price momentum with volume confirmation'}
+                    {formData.strategyType === 'multi-timeframe-trend' && 'Uses longer timeframe trend filter for better entries'}
                   </p>
                 </div>
 
@@ -340,6 +377,9 @@ export default function BacktestPage() {
                             {result.strategyUsed === 'ema-only' && 'EMA Crossover Only'}
                             {result.strategyUsed === 'ema-rsi' && 'EMA + RSI Filter'}
                             {result.strategyUsed === 'ema-rsi-trend' && 'EMA + RSI + Trend'}
+                            {result.strategyUsed === 'mean-reversion' && 'Mean Reversion (Bollinger Bands + RSI)'}
+                            {result.strategyUsed === 'momentum' && 'Momentum (Price + Volume)'}
+                            {result.strategyUsed === 'multi-timeframe-trend' && 'Multi-Timeframe Trend'}
                           </span>
                         </div>
                         {result.signalsFiltered !== undefined && (
