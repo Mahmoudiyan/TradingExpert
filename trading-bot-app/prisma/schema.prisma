@@ -1,0 +1,109 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model BotConfig {
+  id                String   @id @default(cuid())
+  symbol            String   @default("BTC-USDT")
+  fastMA            Int      @default(9)
+  slowMA            Int      @default(21)
+  timeframe         String   @default("4hour") // 1min, 5min, 15min, 30min, 1hour, 4hour, 1day
+  riskPercent       Float    @default(1.5)
+  stopLossPips      Float    @default(30.0)
+  takeProfitPips    Float    @default(75.0)
+  maxDailyLoss      Float    @default(4.0)
+  maxDailyProfit     Float    @default(8.0)
+  maxSpreadPips     Float    @default(3.0)
+  allowBuy          Boolean  @default(true)
+  allowSell         Boolean  @default(true)
+  isActive          Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([symbol, timeframe])
+}
+
+model Trade {
+  id                String   @id @default(cuid())
+  orderId           String?  // KuCoin order ID
+  symbol            String
+  side              String   // buy or sell
+  type              String   // market, limit
+  price             Float
+  size              Float
+  stopLoss          Float?
+  takeProfit        Float?
+  status            String   @default("pending") // pending, filled, cancelled, failed
+  profit            Float?   @default(0)
+  profitPercent     Float?   @default(0)
+  openedAt          DateTime @default(now())
+  closedAt          DateTime?
+  notes             String?
+
+  @@index([symbol])
+  @@index([openedAt])
+  @@index([status])
+}
+
+model BotStatus {
+  id                String   @id @default("main")
+  isRunning         Boolean  @default(false)
+  lastCheck         DateTime?
+  lastTrade         DateTime?
+  dailyProfit       Float    @default(0)
+  dailyLoss         Float    @default(0)
+  totalProfit        Float    @default(0)
+  totalTrades        Int      @default(0)
+  winningTrades      Int      @default(0)
+  losingTrades       Int      @default(0)
+  updatedAt          DateTime @updatedAt
+}
+
+model BotLog {
+  id                String   @id @default(cuid())
+  level             String   // info, warning, error
+  message           String
+  data              Json?
+  createdAt         DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([level])
+}
+
+model Backtest {
+  id                String   @id @default(cuid())
+  symbol            String
+  timeframe         String
+  startDate         DateTime
+  endDate           DateTime
+  fastMA            Int
+  slowMA            Int
+  riskPercent       Float
+  stopLossPips      Float
+  takeProfitPips    Float
+  initialBalance    Float
+  finalBalance      Float
+  totalProfit        Float
+  totalProfitPercent Float
+  totalTrades        Int
+  winningTrades      Int
+  losingTrades       Int
+  winRate            Float
+  maxDrawdown        Float
+  maxDrawdownPercent Float
+  sharpeRatio        Float
+  results            Json     // Full backtest results
+  createdAt          DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([symbol])
+}
+

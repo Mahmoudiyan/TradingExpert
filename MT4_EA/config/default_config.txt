@@ -1,0 +1,52 @@
+# TradingExpert EA Configuration - Best Practice Settings for MT4
+# Optimized for profitable trading with managed risk
+
+# Trading Settings
+Symbol=EURUSD
+# Recommended symbols: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, NZDUSD
+# EURUSD is the most liquid and stable - best for beginners
+MagicNumber=123456
+TradeComment=TradingExpert
+
+# Risk Management (Conservative & Profitable)
+RiskPercent=1.5
+# Risk 1.5% per trade - conservative approach protects capital
+StopLossPips=30.0
+# 30 pips stop loss - optimal for major currency pairs
+TakeProfitPips=75.0
+# 75 pips take profit - 2.5:1 risk/reward ratio (profitable)
+MaxDailyLoss=4.0
+# Stop trading if daily loss reaches 4% - protects account
+MaxDailyProfit=8.0
+# Secure profits when daily gain reaches 8% - compound growth
+
+# Strategy Settings (Optimized for H4 Timeframe)
+FastMA=9
+# Fast EMA period - responsive to trend changes
+SlowMA=21
+# Slow EMA period - smooth trend filter (Fibonacci number)
+MAMethod=1
+# MA Method: 0=SMA, 1=EMA, 2=WMA, 3=LWMA (EMA recommended)
+Timeframe=240
+# Timeframe in minutes: 60=H1, 240=H4, 1440=D1 (H4 recommended)
+
+# Trade Direction
+AllowBuy=true
+# Trade long positions - both directions recommended
+AllowSell=true
+# Trade short positions - market neutral approach
+
+# Filter Settings
+MaxSpreadPips=3.0
+# Maximum spread - avoid trading when spread is too wide
+FilterLowLiquidity=true
+# Filter low liquidity hours - better execution
+StartHour=2
+# Trading start hour (GMT) - avoid Asian session low liquidity
+EndHour=20
+# Trading end hour (GMT) - avoid late night low liquidity
+
+# General Settings
+EnableTrading=true
+Slippage=3
+
