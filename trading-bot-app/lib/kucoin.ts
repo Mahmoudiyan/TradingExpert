@@ -1,10 +1,12 @@
 // Import fetch polyfill FIRST - must run before SDK loads
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 require('./fetch-polyfill')
 
 // Ensure fetch is available before requiring SDK
 // The SDK may capture fetch reference at load time
 if (typeof globalThis.fetch !== 'function' && typeof global?.fetch !== 'function') {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nodeFetch = require('node-fetch')
     const fetchImpl = typeof nodeFetch === 'function' ? nodeFetch : (nodeFetch.default || nodeFetch)
     globalThis.fetch = fetchImpl
@@ -18,11 +20,13 @@ if (typeof globalThis.fetch !== 'function' && typeof global?.fetch !== 'function
 
 // Use CommonJS require for kucoin-node-sdk as it doesn't support ES6 imports
 // Load SDK AFTER fetch is guaranteed to be available
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const API = require('kucoin-node-sdk')
 
 // Re-ensure fetch is available right before init (SDK might check at init time)
 if (typeof globalThis.fetch !== 'function') {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nodeFetch = require('node-fetch')
     const fetchImpl = typeof nodeFetch === 'function' ? nodeFetch : (nodeFetch.default || nodeFetch)
     globalThis.fetch = fetchImpl
@@ -60,7 +64,9 @@ try {
     // Unfortunately, the SDK doesn't expose the fetch directly, so we need another approach
     
     // Alternative: Patch the require cache to ensure node-fetch returns our fetch
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Module = require('module')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nodeFetchPath = require.resolve('node-fetch')
     // Force the cached version to be our fetch function
     if (Module._cache[nodeFetchPath]) {
@@ -160,12 +166,20 @@ export class KucoinService implements ExchangeService {
         holds: acc.holds,
       }))
       return accounts
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error fetching accounts:', error)
       // Re-throw with more context
-      const errorMessage = error?.response?.data?.msg || error?.message || 'Failed to fetch accounts'
+      let errorMessage = 'Failed to fetch accounts'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      } else if (typeof error === 'object' && error !== null && 'response' in error) {
+        const err = error as { response?: { data?: { msg?: string } } }
+        errorMessage = err.response?.data?.msg || errorMessage
+      }
       const enhancedError = new Error(errorMessage)
-      ;(enhancedError as any).originalError = error
+      if (error instanceof Error) {
+        (enhancedError as Error & { originalError?: unknown }).originalError = error
+      }
       throw enhancedError
     }
   }
@@ -181,11 +195,19 @@ export class KucoinService implements ExchangeService {
     try {
       const response = await API.rest.User.Account.getAccountInfo()
       return response.data as KucoinAccountSummary
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error fetching account summary:', error)
-      const errorMessage = error?.response?.data?.msg || error?.message || 'Failed to fetch account summary'
+      let errorMessage = 'Failed to fetch account summary'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      } else if (typeof error === 'object' && error !== null && 'response' in error) {
+        const err = error as { response?: { data?: { msg?: string } } }
+        errorMessage = err.response?.data?.msg || errorMessage
+      }
       const enhancedError = new Error(errorMessage)
-      ;(enhancedError as any).originalError = error
+      if (error instanceof Error) {
+        (enhancedError as Error & { originalError?: unknown }).originalError = error
+      }
       throw enhancedError
     }
   }
@@ -225,19 +247,27 @@ export class KucoinService implements ExchangeService {
       const klines = response.data || []
       // Reverse to get chronological order (oldest first) for proper backtesting
       const reversed = [...klines].reverse()
-      return reversed.map((k: any[]) => ({
-        time: parseInt(k[0]),
-        open: k[1],
-        high: k[3],
-        low: k[4],
-        close: k[2],
-        volume: k[5],
+      return reversed.map((k: (string | number)[]) => ({
+        time: parseInt(String(k[0])),
+        open: String(k[1]),
+        high: String(k[3]),
+        low: String(k[4]),
+        close: String(k[2]),
+        volume: String(k[5]),
       }))
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error fetching klines:', error)
-      const errorMessage = error?.response?.data?.msg || error?.message || 'Failed to fetch klines'
+      let errorMessage = 'Failed to fetch klines'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      } else if (typeof error === 'object' && error !== null && 'response' in error) {
+        const err = error as { response?: { data?: { msg?: string } } }
+        errorMessage = err.response?.data?.msg || errorMessage
+      }
       const enhancedError = new Error(errorMessage)
-      ;(enhancedError as any).originalError = error
+      if (error instanceof Error) {
+        (enhancedError as Error & { originalError?: unknown }).originalError = error
+      }
       throw enhancedError
     }
   }
@@ -257,11 +287,19 @@ export class KucoinService implements ExchangeService {
         bestAsk: response.data.bestAsk || '0',
         bestBid: response.data.bestBid || '0',
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error fetching ticker:', error)
-      const errorMessage = error?.response?.data?.msg || error?.message || 'Failed to fetch ticker'
+      let errorMessage = 'Failed to fetch ticker'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      } else if (typeof error === 'object' && error !== null && 'response' in error) {
+        const err = error as { response?: { data?: { msg?: string } } }
+        errorMessage = err.response?.data?.msg || errorMessage
+      }
       const enhancedError = new Error(errorMessage)
-      ;(enhancedError as any).originalError = error
+      if (error instanceof Error) {
+        (enhancedError as Error & { originalError?: unknown }).originalError = error
+      }
       throw enhancedError
     }
   }

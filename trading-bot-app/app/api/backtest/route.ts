@@ -57,18 +57,23 @@ export async function POST(request: Request) {
     )
 
     return NextResponse.json(result)
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Backtest error:', error)
-    console.error('Error stack:', error.stack)
     
     // Extract detailed error message
     let errorMessage = 'Backtest failed'
-    if (error.message) {
+    if (error instanceof Error) {
       errorMessage = error.message
-    } else if (error.response?.data?.msg) {
-      errorMessage = error.response.data.msg
-    } else if (error.response?.data?.message) {
-      errorMessage = error.response.data.message
+      if (error.stack) {
+        console.error('Error stack:', error.stack)
+      }
+    } else if (typeof error === 'object' && error !== null && 'response' in error) {
+      const err = error as { response?: { data?: { msg?: string; message?: string } } }
+      if (err.response?.data?.msg) {
+        errorMessage = err.response.data.msg
+      } else if (err.response?.data?.message) {
+        errorMessage = err.response.data.message
+      }
     }
     
     return NextResponse.json(

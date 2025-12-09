@@ -245,8 +245,14 @@ export class BacktestService {
     let klines
     try {
       klines = await exchange.getKlines(symbol, timeframe, startAt, endAt)
-    } catch (error: any) {
-      const errorMsg = error?.response?.data?.msg || error?.message || 'Failed to fetch historical data'
+    } catch (error: unknown) {
+      let errorMsg = 'Failed to fetch historical data'
+      if (error instanceof Error) {
+        errorMsg = error.message
+      } else if (typeof error === 'object' && error !== null && 'response' in error) {
+        const err = error as { response?: { data?: { msg?: string } } }
+        errorMsg = err.response?.data?.msg || errorMsg
+      }
       const exchangeName = exchange.getName()
       throw new Error(`Failed to fetch data for ${symbol} from ${exchangeName}: ${errorMsg}. Please check if the symbol is available on ${exchangeName}.`)
     }
@@ -339,7 +345,7 @@ export class BacktestService {
         // Check for stop loss or take profit
         let shouldClose = false
         let exitPrice = currentPrice
-        let exitReason = ''
+            let exitReason = '' // Track exit reason for debugging/logging
 
         if (side === 'buy') {
           if (currentPrice <= stopLoss) {

@@ -5,9 +5,10 @@ export async function POST() {
   try {
     await tradingBot.stop()
     return NextResponse.json({ success: true, message: 'Bot stopped' })
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to stop bot'
     return NextResponse.json(
-      { error: error.message },
+      { error: errorMessage },
       { status: 500 }
     )
   }

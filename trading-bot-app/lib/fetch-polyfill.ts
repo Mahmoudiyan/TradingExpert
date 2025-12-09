@@ -5,6 +5,7 @@
 
 // CRITICAL: Patch require to ensure node-fetch returns correctly when SDK requires it
 // This must happen BEFORE the SDK module is loaded
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const Module = require('module')
 const originalRequire = Module.prototype.require
 
@@ -14,6 +15,7 @@ Module.prototype.require = function(id: string) {
     try {
       // Try to require our shim first
       try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const shimPath = require.resolve('../lib/node-fetch-shim.js')
         const shimFetch = originalRequire.call(this, shimPath)
         if (typeof shimFetch === 'function') {
@@ -44,10 +46,11 @@ Module.prototype.require = function(id: string) {
 
 // Also set up global fetch for good measure
 try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const nodeFetch = require('node-fetch')
   
   // Get the actual fetch function
-  let fetchImpl: any
+  let fetchImpl: typeof fetch | ((...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>)
   if (typeof nodeFetch === 'function') {
     fetchImpl = nodeFetch
   } else if (nodeFetch && typeof nodeFetch.default === 'function') {

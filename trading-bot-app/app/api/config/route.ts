@@ -7,17 +7,19 @@ export async function GET() {
       orderBy: { createdAt: 'desc' },
     })
     return NextResponse.json(configs)
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Config GET error:', error)
-    console.error('Error stack:', error.stack)
     
     // Extract detailed error message
     let errorMessage = 'Failed to fetch configuration'
     let errorDetails = 'Unknown error'
     
-    if (error.message) {
+    if (error instanceof Error) {
       errorMessage = error.message
       errorDetails = error.toString()
+      if (error.stack) {
+        console.error('Error stack:', error.stack)
+      }
     } else if (typeof error === 'string') {
       errorMessage = error
       errorDetails = error
@@ -58,17 +60,19 @@ export async function POST(request: Request) {
     })
 
     return NextResponse.json(config)
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Config POST error:', error)
-    console.error('Error stack:', error.stack)
     
     // Extract detailed error message
     let errorMessage = 'Failed to save configuration'
     let errorDetails = 'Unknown error'
     
-    if (error.message) {
+    if (error instanceof Error) {
       errorMessage = error.message
       errorDetails = error.toString()
+      if (error.stack) {
+        console.error('Error stack:', error.stack)
+      }
     } else if (typeof error === 'string') {
       errorMessage = error
       errorDetails = error

@@ -15,7 +15,8 @@ interface SliderProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 
 const Slider = React.forwardRef<HTMLInputElement, SliderProps>(
   ({ value, onValueChange, min = 0, max = 100, step = 1, className, id, ...props }, ref) => {
     const percentage = ((value - min) / (max - min)) * 100
-    const sliderId = id || `slider-${Math.random().toString(36).substr(2, 9)}`
+    const [generatedId] = React.useState(() => `slider-${Math.random().toString(36).substring(2, 11)}`)
+    const sliderId = id || generatedId
 
     React.useEffect(() => {
       const style = document.createElement('style')

@@ -14,7 +14,7 @@ interface OandaConfig {
 function normalizeSymbol(symbol: string): string {
   // Convert common formats to OANDA format
   // EUR-USD or EURUSDT or EUR/USD -> EUR_USD
-  let normalized = symbol
+  const normalized = symbol
     .replace(/-/g, '_')
     .replace(/\//g, '_')
     .replace(/USDT/g, 'USD')
@@ -110,9 +110,10 @@ export class OandaService implements ExchangeService {
       }
 
       return accounts
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('OANDA getAccounts error:', error)
-      throw new Error(`Failed to fetch OANDA accounts: ${error.message}`)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      throw new Error(`Failed to fetch OANDA accounts: ${errorMessage}`)
     }
   }
 
@@ -187,9 +188,10 @@ export class OandaService implements ExchangeService {
       
       // OANDA returns newest first, reverse to get oldest first
       return klines.reverse()
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('OANDA getKlines error:', error)
-      throw new Error(`Failed to fetch OANDA candles for ${symbol}: ${error.message}`)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      throw new Error(`Failed to fetch OANDA candles for ${symbol}: ${errorMessage}`)
     }
   }
 
@@ -219,9 +221,10 @@ export class OandaService implements ExchangeService {
       }
 
       throw new Error('No pricing data received from OANDA')
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('OANDA getTicker error:', error)
-      throw new Error(`Failed to fetch OANDA ticker for ${symbol}: ${error.message}`)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      throw new Error(`Failed to fetch OANDA ticker for ${symbol}: ${errorMessage}`)
     }
   }
 
@@ -229,7 +232,7 @@ export class OandaService implements ExchangeService {
     symbol: string,
     side: 'buy' | 'sell',
     size?: string,
-    funds?: string
+    _funds?: string // OANDA doesn't use funds parameter, kept for interface compatibility
   ): Promise<Order> {
     try {
       const normalizedSymbol = normalizeSymbol(symbol)
@@ -274,9 +277,10 @@ export class OandaService implements ExchangeService {
         status: order.type === 'ORDER_FILL' ? 'filled' : 'pending',
         createdAt: Math.floor(Date.now() / 1000),
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('OANDA placeMarketOrder error:', error)
-      throw new Error(`Failed to place OANDA order: ${error.message}`)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      throw new Error(`Failed to place OANDA order: ${errorMessage}`)
     }
   }
 
@@ -326,7 +330,7 @@ export class OandaService implements ExchangeService {
         status: 'pending',
         createdAt: Math.floor(Date.now() / 1000),
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('OANDA placeLimitOrder error:', error)
       throw error
     }

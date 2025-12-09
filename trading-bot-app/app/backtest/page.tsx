@@ -28,6 +28,8 @@ interface BacktestResult {
   maxDrawdownPercent: number
   sharpeRatio: number
   trades: BacktestTrade[]
+  strategyUsed?: string
+  signalsFiltered?: number
 }
 
 interface BacktestTrade {
@@ -94,8 +96,9 @@ export default function BacktestPage() {
 
       const data = await response.json()
       setResult(data)
-    } catch (error: any) {
-      alert(`Error: ${error.message}`)
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      alert(`Error: ${errorMessage}`)
     } finally {
       setLoading(false)
     }
@@ -542,7 +545,7 @@ export default function BacktestPage() {
                 <CardContent className="flex items-center justify-center h-96">
                   <div className="text-center text-muted-foreground">
                     <p className="text-lg mb-2">No backtest results yet</p>
-                    <p className="text-sm">Configure parameters and click "Run Backtest" to start</p>
+                    <p className="text-sm">Configure parameters and click &quot;Run Backtest&quot; to start</p>
                   </div>
                 </CardContent>
               </Card>

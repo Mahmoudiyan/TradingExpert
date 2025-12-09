@@ -14,17 +14,17 @@ function isForexSymbol(symbol: string): boolean {
   return forexPatterns.some(pattern => pattern.test(symbol))
 }
 
-// Detect if a symbol is a crypto pair
-function isCryptoSymbol(symbol: string): boolean {
-  // Crypto pairs typically end with -USDT, -BTC, -ETH, etc.
-  // Or contain common crypto symbols
-  const cryptoPatterns = [
-    /-(USDT|BTC|ETH|BNB|BUSD|USDC|DAI|TUSD)$/i,
-    /^(BTC|ETH|LTC|XRP|ADA|DOT|SOL|MATIC|AVAX|LINK|UNI|ATOM)/i,
-  ]
-  
-  return cryptoPatterns.some(pattern => pattern.test(symbol))
-}
+// Detect if a symbol is a crypto pair (currently unused but kept for future use)
+// function isCryptoSymbol(symbol: string): boolean {
+//   // Crypto pairs typically end with -USDT, -BTC, -ETH, etc.
+//   // Or contain common crypto symbols
+//   const cryptoPatterns = [
+//     /-(USDT|BTC|ETH|BNB|BUSD|USDC|DAI|TUSD)$/i,
+//     /^(BTC|ETH|LTC|XRP|ADA|DOT|SOL|MATIC|AVAX|LINK|UNI|ATOM)/i,
+//   ]
+//   
+//   return cryptoPatterns.some(pattern => pattern.test(symbol))
+// }
 
 /**
  * Get exchange service by name

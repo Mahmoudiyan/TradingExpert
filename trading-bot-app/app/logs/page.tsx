@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -11,7 +11,7 @@ interface Log {
   id: string
   level: string
   message: string
-  data: any
+  data: unknown
   createdAt: string
 }
 
@@ -21,13 +21,7 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<string>('all')
 
-  useEffect(() => {
-    fetchLogs()
-    const interval = setInterval(fetchLogs, 5000)
-    return () => clearInterval(interval)
-  }, [filter])
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const url = filter && filter !== 'all' ? `/api/logs?limit=200&level=${filter}` : '/api/logs?limit=200'
       const res = await fetch(url)
@@ -38,7 +32,13 @@ export default function LogsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [filter])
+
+  useEffect(() => {
+    fetchLogs()
+    const interval = setInterval(fetchLogs, 5000)
+    return () => clearInterval(interval)
+  }, [fetchLogs])
 
   const getLevelVariant = (level: string): "default" | "secondary" | "destructive" | "outline" => {
     switch (level) {
@@ -108,9 +108,11 @@ export default function LogsPage() {
                           </span>
                         </div>
                         <div className="text-sm text-foreground">{log.message}</div>
-                        {log.data && (
+                        {log.data != null && (
                           <pre className="mt-2 text-xs bg-muted p-3 rounded-md overflow-x-auto text-foreground">
-                            {JSON.stringify(log.data, null, 2)}
+                            {typeof log.data === 'object' 
+                              ? JSON.stringify(log.data, null, 2) 
+                              : String(log.data)}
                           </pre>
                         )}
                       </div>

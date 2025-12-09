@@ -111,17 +111,19 @@ export async function GET(request: Request) {
       exchange: exchange.getName(),
       // Note: symbol is not included as balance is not symbol-specific
     })
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error fetching balance:', error)
-    console.error('Error stack:', error.stack)
     
     // Extract detailed error message
     let errorMessage = 'Failed to fetch balance'
     let errorDetails = 'Unknown error'
     
-    if (error.message) {
+    if (error instanceof Error) {
       errorMessage = error.message
       errorDetails = error.toString()
+      if (error.stack) {
+        console.error('Error stack:', error.stack)
+      }
     } else if (typeof error === 'string') {
       errorMessage = error
       errorDetails = error

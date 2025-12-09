@@ -14,9 +14,10 @@ export async function GET(request: Request) {
     })
 
     return NextResponse.json(trades)
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to fetch trades'
     return NextResponse.json(
-      { error: error.message },
+      { error: errorMessage },
       { status: 500 }
     )
   }

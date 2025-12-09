@@ -1,47 +1,35 @@
-# Dependencies
-node_modules/
-*/node_modules/
-
-# Environment variables
+# Environment files
 .env
 .env.local
-.env.*.local
+.env.production.local
+.env.development.local
+
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Build outputs
-dist/
-build/
 .next/
 out/
-*.log
+dist/
+build/
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Docker
-*.pid
-*.seed
-*.pid.lock
+# Logs
+*.log
+logs/
 
-# Database
-*.db
-*.sqlite
-
-# Prisma
-prisma/migrations/
-
-# Testing
-coverage/
-.nyc_output/
-
-# Misc
-*.pem
-.cache/
-
+# Uploads
+uploads/
+public/uploads/

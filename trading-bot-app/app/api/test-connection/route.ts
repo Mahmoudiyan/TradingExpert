@@ -97,25 +97,31 @@ export async function GET(request: Request) {
     }
     
     return NextResponse.json(responseData)
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('API test error:', error)
-    console.error('Error stack:', error.stack)
-    console.error('Error response:', error.response)
     
     // Extract more detailed error information
     let errorMessage = 'API connection failed'
     let errorDetails = 'Unknown error'
     
-    // Try different error formats
-    if (error.response?.data) {
-      errorMessage = error.response.data.msg || error.response.data.message || error.response.data.code || errorMessage
-      errorDetails = JSON.stringify(error.response.data, null, 2)
-    } else if (error.data) {
-      errorMessage = error.data.msg || error.data.message || error.data.code || errorMessage
-      errorDetails = JSON.stringify(error.data, null, 2)
-    } else if (error.message) {
+    if (error instanceof Error) {
       errorMessage = error.message
       errorDetails = error.toString()
+      if (error.stack) {
+        console.error('Error stack:', error.stack)
+      }
+    } else if (typeof error === 'object' && error !== null) {
+      const err = error as { response?: { data?: { msg?: string; message?: string; code?: string } }; data?: { msg?: string; message?: string; code?: string } }
+      if (err.response?.data) {
+        errorMessage = err.response.data.msg || err.response.data.message || err.response.data.code || errorMessage
+        errorDetails = JSON.stringify(err.response.data, null, 2)
+        console.error('Error response:', err.response)
+      } else if (err.data) {
+        errorMessage = err.data.msg || err.data.message || err.data.code || errorMessage
+        errorDetails = JSON.stringify(err.data, null, 2)
+      } else {
+        errorDetails = JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+      }
     } else if (typeof error === 'string') {
       errorMessage = error
       errorDetails = error

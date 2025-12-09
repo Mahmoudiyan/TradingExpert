@@ -1,8 +1,10 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Shim module for node-fetch
 // This ensures the SDK gets a function when it requires('node-fetch')
 // IMPORTANT: This file will be aliased by webpack, so we need to require the REAL node-fetch
 // using a path that bypasses webpack resolution
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const path = require('path');
 const Module = require('module');
 

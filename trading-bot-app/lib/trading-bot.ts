@@ -1,7 +1,7 @@
 import { getExchangeForSymbol } from './exchange/router'
 import type { Kline } from './exchange/interface'
 import { prisma } from './db'
-import { format, subDays } from 'date-fns'
+// Removed unused imports: format, subDays
 
 export interface MovingAverage {
   fast: number
@@ -120,10 +120,10 @@ export class TradingBot {
     symbol: string,
     side: 'buy' | 'sell',
     size: number,
-    config: any
+    config: { stopLossPips?: number; takeProfitPips?: number; [key: string]: unknown }
   ) {
     try {
-      const exchange = getExchangeForSymbol(symbol, config.exchange)
+      const exchange = getExchangeForSymbol(symbol, typeof config.exchange === 'string' ? config.exchange : undefined)
       const order = await exchange.placeMarketOrder(
         symbol,
         side,
@@ -153,12 +153,12 @@ export class TradingBot {
       })
 
       return { success: true, trade, order }
-    } catch (error: any) {
+    } catch (error: unknown) {
       await prisma.botLog.create({
         data: {
           level: 'error',
-          message: `Trade failed: ${error.message}`,
-          data: { error: error.toString() },
+          message: `Trade failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          data: { error: error instanceof Error ? error.toString() : String(error) },
         },
       })
       throw error
@@ -280,12 +280,12 @@ export class TradingBot {
       // Update bot status
       await this.updateBotStatus()
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       await prisma.botLog.create({
         data: {
           level: 'error',
-          message: `Trading loop error: ${error.message}`,
-          data: { error: error.toString() },
+          message: `Trading loop error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          data: { error: error instanceof Error ? error.toString() : String(error) },
         },
       })
     } finally {

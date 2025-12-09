@@ -112,7 +112,7 @@ export default function Home() {
       
       if (configRes.ok) {
         const configs = await configRes.json()
-        const activeConfig = configs.find((c: any) => c.isActive) || configs[0]
+        const activeConfig = configs.find((c: { isActive?: boolean }) => c.isActive) || configs[0]
         if (activeConfig) {
           setRiskSettings({
             maxBalancePercent: activeConfig.maxBalancePercent || 50,
@@ -235,7 +235,7 @@ export default function Home() {
       if (data.exchange) {
         setBalanceExchange(data.exchange)
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error refreshing balance:', error)
     } finally {
       setRefreshingBalance(false)
@@ -259,11 +259,12 @@ export default function Home() {
       const res = await fetch(`/api/test-connection?${params.toString()}`)
       const data = await res.json()
       setApiTestResult(data)
-    } catch (error: any) {
+    } catch (error: unknown) {
+      console.error('Error testing API connection:', error)
       setApiTestResult({
         success: false,
         message: 'Failed to test API connection',
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
       })
     } finally {
       setTestingApi(false)
@@ -278,7 +279,7 @@ export default function Home() {
       // Get active config
       const configRes = await fetch('/api/config')
       const configs = await configRes.json()
-      const activeConfig = configs.find((c: any) => c.isActive) || configs[0]
+      const activeConfig = configs.find((c: { isActive?: boolean }) => c.isActive) || configs[0]
       
       if (activeConfig) {
         await fetch('/api/config', {
@@ -497,7 +498,7 @@ export default function Home() {
               </div>
             ) : (
               <div className="text-center py-8 text-muted-foreground">
-                Click "Refresh" to load account balance for {balanceExchange}
+                Click &quot;Refresh&quot; to load account balance for {balanceExchange}
               </div>
             )}
           </CardContent>
