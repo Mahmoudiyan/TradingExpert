@@ -27,6 +27,7 @@ model BotConfig {
   allowBuy          Boolean  @default(true)
   allowSell         Boolean  @default(true)
   isActive          Boolean  @default(false)
+  strategyType      String?  @default("ema-rsi") // Strategy type for backtesting: ema-only, ema-rsi, ema-rsi-trend, mean-reversion, momentum, multi-timeframe-trend
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

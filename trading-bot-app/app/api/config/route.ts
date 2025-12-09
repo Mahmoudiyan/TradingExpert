@@ -48,15 +48,43 @@ export async function POST(request: Request) {
   try {
     const body = await request.json()
     
+    // Filter out fields that don't exist in the Prisma schema
+    // Only include fields that are defined in BotConfig model
+    const allowedFields = [
+      'exchange',
+      'symbol',
+      'fastMA',
+      'slowMA',
+      'timeframe',
+      'riskPercent',
+      'stopLossPips',
+      'takeProfitPips',
+      'maxDailyLoss',
+      'maxDailyProfit',
+      'maxSpreadPips',
+      'maxBalancePercent',
+      'allowBuy',
+      'allowSell',
+      'isActive',
+      'strategyType', // Strategy type for backtesting
+    ]
+    
+    const filteredBody = Object.keys(body)
+      .filter(key => allowedFields.includes(key))
+      .reduce((obj, key) => {
+        obj[key] = body[key]
+        return obj
+      }, {} as Record<string, unknown>)
+    
     const config = await prisma.botConfig.upsert({
       where: {
         symbol_timeframe: {
-          symbol: body.symbol,
-          timeframe: body.timeframe,
+          symbol: filteredBody.symbol as string,
+          timeframe: filteredBody.timeframe as string,
         },
       },
-      update: body,
-      create: body,
+      update: filteredBody,
+      create: filteredBody,
     })
 
     return NextResponse.json(config)
