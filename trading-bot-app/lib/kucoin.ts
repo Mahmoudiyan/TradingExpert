@@ -108,6 +108,21 @@ export interface KucoinKline {
   volume: string
 }
 
+export interface KucoinAccountSummary {
+  level: number
+  subQuantity: number
+  spotSubQuantity: number
+  marginSubQuantity: number
+  futuresSubQuantity: number
+  optionSubQuantity: number
+  maxSubQuantity: number
+  maxDefaultSubQuantity: number
+  maxSpotSubQuantity: number
+  maxMarginSubQuantity: number
+  maxFuturesSubQuantity: number
+  maxOptionSubQuantity: number
+}
+
 import type { ExchangeService, Account, Order, Kline, Ticker } from './exchange/interface'
 
 export class KucoinService implements ExchangeService {
@@ -124,7 +139,13 @@ export class KucoinService implements ExchangeService {
     ]
     return cryptoPatterns.some(pattern => pattern.test(symbol))
   }
-  // Get account balance
+  /**
+   * Get account list (Spot accounts)
+   * Official API: GET /api/v1/accounts
+   * Documentation: https://www.kucoin.com/docs-new/rest/account-info/account-funding/get-account-list-spot
+   * 
+   * Returns list of all accounts (main, trade, margin, etc.) for the specified currency
+   */
   async getAccounts(currency?: string): Promise<Account[]> {
     try {
       const response = await API.rest.User.Account.getAccountsList({
@@ -149,6 +170,26 @@ export class KucoinService implements ExchangeService {
     }
   }
 
+  /**
+   * Get account summary information
+   * Official API: GET /api/v2/user-info
+   * Documentation: https://www.kucoin.com/docs-new/rest/account-info/account-funding/get-account-summary-info
+   * 
+   * Returns account summary including level, sub-account quantities, etc.
+   */
+  async getAccountSummary(): Promise<KucoinAccountSummary> {
+    try {
+      const response = await API.rest.User.Account.getAccountInfo()
+      return response.data as KucoinAccountSummary
+    } catch (error: any) {
+      console.error('Error fetching account summary:', error)
+      const errorMessage = error?.response?.data?.msg || error?.message || 'Failed to fetch account summary'
+      const enhancedError = new Error(errorMessage)
+      ;(enhancedError as any).originalError = error
+      throw enhancedError
+    }
+  }
+
   // Get account balance for a specific currency
   async getBalance(currency: string): Promise<number> {
     try {
@@ -161,7 +202,13 @@ export class KucoinService implements ExchangeService {
     }
   }
 
-  // Get klines (candlestick data)
+  /**
+   * Get klines (candlestick data)
+   * Official API: GET /api/v1/market/candles
+   * Documentation: https://www.kucoin.com/docs-new/rest/market-data/get-klines
+   * 
+   * Returns historical candlestick data for backtesting and analysis
+   */
   async getKlines(
     symbol: string,
     timeframe: string = '4hour',
@@ -195,7 +242,13 @@ export class KucoinService implements ExchangeService {
     }
   }
 
-  // Get ticker (current price)
+  /**
+   * Get ticker (current price)
+   * Official API: GET /api/v1/market/orderbook/level1
+   * Documentation: https://www.kucoin.com/docs-new/rest/market-data/get-ticker
+   * 
+   * Returns current market price, best bid, and best ask for a symbol
+   */
   async getTicker(symbol: string): Promise<Ticker> {
     try {
       const response = await API.rest.Market.Symbols.getTicker(symbol)
@@ -213,7 +266,13 @@ export class KucoinService implements ExchangeService {
     }
   }
 
-  // Place market order
+  /**
+   * Place market order
+   * Official API: POST /api/v1/orders
+   * Documentation: https://www.kucoin.com/docs-new/rest/spot-trading/orders/add-order
+   * 
+   * Executes a market order immediately at the current market price
+   */
   async placeMarketOrder(
     symbol: string,
     side: 'buy' | 'sell',
@@ -236,7 +295,13 @@ export class KucoinService implements ExchangeService {
     }
   }
 
-  // Place limit order
+  /**
+   * Place limit order
+   * Official API: POST /api/v1/orders
+   * Documentation: https://www.kucoin.com/docs-new/rest/spot-trading/orders/add-order
+   * 
+   * Places a limit order at a specified price
+   */
   async placeLimitOrder(
     symbol: string,
     side: 'buy' | 'sell',
@@ -259,7 +324,13 @@ export class KucoinService implements ExchangeService {
     }
   }
 
-  // Cancel order
+  /**
+   * Cancel order
+   * Official API: DELETE /api/v1/orders/{orderId}
+   * Documentation: https://www.kucoin.com/docs-new/rest/spot-trading/orders/cancel-order-by-orderid
+   * 
+   * Cancels an existing order by order ID
+   */
   async cancelOrder(orderId: string): Promise<void> {
     try {
       await API.rest.Trade.Orders.cancelOrder({ orderId })
@@ -269,7 +340,13 @@ export class KucoinService implements ExchangeService {
     }
   }
 
-  // Get order details
+  /**
+   * Get order details
+   * Official API: GET /api/v1/orders/{orderId}
+   * Documentation: https://www.kucoin.com/docs-new/rest/spot-trading/orders/get-order-by-orderid
+   * 
+   * Retrieves details of a specific order by order ID
+   */
   async getOrder(orderId: string): Promise<Order> {
     try {
       const response = await API.rest.Trade.Orders.getOrder({ orderId })
@@ -280,7 +357,13 @@ export class KucoinService implements ExchangeService {
     }
   }
 
-  // Get open orders
+  /**
+   * Get open orders
+   * Official API: GET /api/v1/orders
+   * Documentation: https://www.kucoin.com/docs-new/rest/spot-trading/orders/get-open-orders
+   * 
+   * Retrieves all active/open orders, optionally filtered by symbol
+   */
   async getOpenOrders(symbol?: string): Promise<Order[]> {
     try {
       const response = await API.rest.Trade.Orders.getOrders({
