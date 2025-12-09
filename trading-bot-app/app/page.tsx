@@ -87,12 +87,8 @@ export default function Home() {
     
     fetchingRef.current = true
     try {
-      const [statusRes, balanceRes, configRes] = await Promise.all([
+      const [statusRes, configRes] = await Promise.all([
         fetch('/api/bot/status', {
-          cache: 'no-store',
-          headers: { 'Cache-Control': 'no-cache' },
-        }),
-        fetch('/api/balance', {
           cache: 'no-store',
           headers: { 'Cache-Control': 'no-cache' },
         }),
@@ -112,14 +108,7 @@ export default function Home() {
         })
       }
       
-      if (balanceRes.ok) {
-        const balanceData = await balanceRes.json()
-        setBalance(balanceData)
-        // Store the exchange used for balance
-        if (balanceData.exchange) {
-          setBalanceExchange(balanceData.exchange)
-        }
-      }
+      let exchangeToUse = balanceExchange
       
       if (configRes.ok) {
         const configs = await configRes.json()
@@ -131,10 +120,41 @@ export default function Home() {
             maxDailyProfit: activeConfig.maxDailyProfit || 8.0,
             riskPercent: activeConfig.riskPercent || 1.5,
           })
-          // Set balance exchange from active config
+          // Use exchange from active config if available, otherwise use current balanceExchange
           if (activeConfig.exchange) {
-            setBalanceExchange(activeConfig.exchange)
+            exchangeToUse = activeConfig.exchange
+            if (!balanceExchange || isInitial) {
+              setBalanceExchange(activeConfig.exchange)
+            }
           }
+        }
+      }
+      
+      // Fetch balance using the determined exchange
+      // Only fetch if we have an exchange (prevents calling API without exchange parameter)
+      if (exchangeToUse) {
+        try {
+          const params = new URLSearchParams()
+          params.append('exchange', exchangeToUse)
+          const balanceRes = await fetch(`/api/balance?${params.toString()}`, {
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache' },
+          })
+          
+          if (balanceRes.ok) {
+            const balanceData = await balanceRes.json()
+            // Only update if we got a valid response without error
+            if (!balanceData.error) {
+              setBalance(balanceData)
+              if (balanceData.exchange) {
+                setBalanceExchange(balanceData.exchange)
+              }
+            }
+            // If there's an error in the response, don't update balance (keep last known value)
+          }
+        } catch (error) {
+          console.error('Error fetching balance:', error)
+          // Don't clear balance on errors - keep the last known balance
         }
       }
     } catch (error) {
@@ -145,7 +165,7 @@ export default function Home() {
         setLoading(false)
       }
     }
-  }, [])
+  }, [balanceExchange])
 
   useEffect(() => {
     // Prevent multiple setups (React Strict Mode can cause double mount in dev)
@@ -170,7 +190,7 @@ export default function Home() {
       if (isMounted && !fetchingRef.current) {
         fetchStatus(false)
       }
-    }, 5000)
+    }, 300000) // 5 minutes (300000ms)
     
     // Cleanup on unmount
     return () => {

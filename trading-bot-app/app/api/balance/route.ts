@@ -40,38 +40,72 @@ export async function GET(request: Request) {
 
     // Get all accounts to find the main trading account balance
     const accounts = await exchange.getAccounts()
-    const tradingAccounts = accounts.filter(acc => acc.type === 'trade')
+    console.log('[Balance API] All accounts received:', accounts.length)
+    console.log('[Balance API] Account details:', JSON.stringify(accounts, null, 2))
     
-    // Find the account with the base currency (USDT for KuCoin, USD for OANDA)
-    const mainAccount = tradingAccounts.find(acc => acc.currency === baseCurrency) || tradingAccounts[0]
+    // For KuCoin, balance can be in "main" or "trade" accounts
+    // We should sum all accounts of the base currency across all account types
+    // Filter accounts by the base currency (case-insensitive)
+    const baseCurrencyAccounts = accounts.filter(acc => 
+      (acc.currency || '').toUpperCase() === baseCurrency.toUpperCase()
+    )
     
-    // If no account found, try to get balance for base currency
+    console.log('[Balance API] Base currency accounts found:', baseCurrencyAccounts.length)
+    
+    // Sum all balances for the base currency across all account types
     let totalBalance = 0
     let availableBalance = 0
+    let finalCurrency = baseCurrency
     
-    if (mainAccount) {
-      totalBalance = parseFloat(mainAccount.balance)
-      availableBalance = parseFloat(mainAccount.available)
+    if (baseCurrencyAccounts.length > 0) {
+      // Sum all balances and available amounts
+      totalBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.balance || '0'), 0)
+      availableBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.available || '0'), 0)
+      
+      console.log('[Balance API] Summed balances for', baseCurrency, '- total:', totalBalance, 'available:', availableBalance)
+      console.log('[Balance API] Account breakdown:', baseCurrencyAccounts.map(acc => ({
+        type: acc.type,
+        balance: acc.balance,
+        available: acc.available
+      })))
+      
+      // If we still have 0, try to find the account with the highest balance
+      if (totalBalance === 0 && availableBalance === 0) {
+        console.log('[Balance API] No balance found in base currency, checking all accounts')
+        // Try to find any account with balance > 0
+        const accountWithBalance = accounts.find(acc => parseFloat(acc.balance || '0') > 0)
+        if (accountWithBalance) {
+          totalBalance = parseFloat(accountWithBalance.balance || '0')
+          availableBalance = parseFloat(accountWithBalance.available || '0')
+          finalCurrency = accountWithBalance.currency || baseCurrency
+          console.log('[Balance API] Found account with balance:', {
+            currency: finalCurrency,
+            type: accountWithBalance.type,
+            balance: totalBalance,
+            available: availableBalance
+          })
+        }
+      }
     } else {
-      // Fallback: try to get balance for base currency
+      console.log('[Balance API] No accounts found for base currency, trying fallback')
+      // Fallback: try to get balance for base currency using getBalance method
       try {
         availableBalance = await exchange.getBalance(baseCurrency)
         totalBalance = availableBalance
+        finalCurrency = baseCurrency
+        console.log('[Balance API] Fallback getBalance result:', availableBalance)
       } catch (error) {
         console.error(`Error getting balance for ${baseCurrency}:`, error)
-        // If that fails, try to sum all trading accounts
-        totalBalance = tradingAccounts.reduce((sum, acc) => sum + parseFloat(acc.balance), 0)
-        availableBalance = tradingAccounts.reduce((sum, acc) => sum + parseFloat(acc.available), 0)
-        // Use the currency of the first account if we can't find base currency
-        if (tradingAccounts.length > 0) {
-          baseCurrency = tradingAccounts[0].currency
-        }
+        // Last resort: sum all accounts
+        totalBalance = accounts.reduce((sum, acc) => sum + parseFloat(acc.balance || '0'), 0)
+        availableBalance = accounts.reduce((sum, acc) => sum + parseFloat(acc.available || '0'), 0)
+        console.log('[Balance API] Summed all accounts - total:', totalBalance, 'available:', availableBalance)
       }
     }
 
     return NextResponse.json({
       balance: availableBalance,
-      currency: mainAccount?.currency || baseCurrency,
+      currency: finalCurrency,
       availableBalance,
       totalBalance,
       exchange: exchange.getName(),
@@ -79,13 +113,37 @@ export async function GET(request: Request) {
     })
   } catch (error: any) {
     console.error('Error fetching balance:', error)
+    console.error('Error stack:', error.stack)
+    
+    // Extract detailed error message
+    let errorMessage = 'Failed to fetch balance'
+    let errorDetails = 'Unknown error'
+    
+    if (error.message) {
+      errorMessage = error.message
+      errorDetails = error.toString()
+    } else if (typeof error === 'string') {
+      errorMessage = error
+      errorDetails = error
+    } else {
+      errorDetails = JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+    }
+    
+    // Check for common database connection errors
+    if (errorMessage.includes('P1001') || errorMessage.includes('Can\'t reach database')) {
+      errorMessage = 'Database connection failed. Please check your DATABASE_URL and ensure the database is running.'
+    } else if (errorMessage.includes('P1012') || errorMessage.includes('Environment variable')) {
+      errorMessage = 'Database configuration error. Please check your DATABASE_URL environment variable.'
+    }
+    
     return NextResponse.json(
       { 
         balance: 0,
         currency: 'USD',
         availableBalance: 0,
         totalBalance: 0,
-        error: error.message || 'Failed to fetch balance'
+        error: errorMessage,
+        details: process.env.NODE_ENV === 'development' ? errorDetails : undefined
       },
       { status: 500 }
     )
