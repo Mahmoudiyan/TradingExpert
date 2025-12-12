@@ -151,14 +151,26 @@ export async function POST(request: Request) {
         tradeSize = filledSize
       } else {
         // Fallback: use testFunds and estimated price from ticker
-        try {
-          const ticker = await exchange.getTicker(symbol)
-          tradePrice = parseFloat(ticker.price)
-          tradeSize = testFunds / tradePrice
-        } catch (tickerError) {
-          console.warn(`[Test Trade] Could not fetch ticker for price calculation:`, tickerError)
-          tradePrice = parseFloat(orderDetails.price || '0')
-          tradeSize = testSize || 0
+        if (testFunds && testFunds > 0) {
+          try {
+            const ticker = await exchange.getTicker(symbol)
+            tradePrice = parseFloat(ticker.price)
+            tradeSize = testFunds / tradePrice
+          } catch (tickerError) {
+            console.warn(`[Test Trade] Could not fetch ticker for price calculation:`, tickerError)
+          }
+        }
+        
+        // If still no values, try one more fallback
+        if (tradePrice === 0 || tradeSize === 0) {
+          try {
+            const ticker = await exchange.getTicker(symbol)
+            tradePrice = parseFloat(ticker.price)
+            if (testFunds && testFunds > 0) {
+              tradeSize = testFunds / tradePrice
+            } else if (testSize && testSize > 0) {
+              tradeSize = testSize
+            }
         }
       }
     } else if (testSize) {
