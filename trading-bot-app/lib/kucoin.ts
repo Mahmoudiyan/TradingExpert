@@ -411,6 +411,15 @@ export class KucoinService implements ExchangeService {
         ...(size ? { size } : {}),
         ...(funds ? { funds } : {}),
       })
+      
+      if (!response || !response.data) {
+        throw new Error(`KuCoin API returned invalid response: ${JSON.stringify(response)}`)
+      }
+      
+      if (!response.data.orderId && !response.data.id) {
+        throw new Error(`KuCoin order response missing orderId/id: ${JSON.stringify(response.data)}`)
+      }
+      
       return response.data
     } catch (error) {
       console.error('Error placing order:', error)

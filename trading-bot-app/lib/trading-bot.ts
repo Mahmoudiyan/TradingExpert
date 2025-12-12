@@ -1,5 +1,6 @@
 import { getExchangeForSymbol } from './exchange/router'
 import type { Kline } from './exchange/interface'
+import type { KucoinService } from './kucoin'
 import { prisma } from './db'
 // Removed unused imports: format, subDays
 
@@ -148,6 +149,14 @@ export class TradingBot {
         size.toFixed(8)
       )
 
+      // Validate order response
+      if (!order) {
+        throw new Error(`Order placement failed: exchange returned undefined order`)
+      }
+      if (!order.id) {
+        throw new Error(`Order placement failed: order missing id field. Order data: ${JSON.stringify(order)}`)
+      }
+
       // Save trade to database
       const trade = await prisma.trade.create({
         data: {
@@ -157,7 +166,7 @@ export class TradingBot {
           type: 'market',
           price: parseFloat(order.price || '0'),
           size,
-          status: order.status,
+          status: order.status || 'unknown',
         },
       })
 
@@ -297,7 +306,7 @@ export class TradingBot {
       // If KuCoin and trade balance is insufficient, try to transfer from main account
       if (exchange.getName() === 'KuCoin' && balance <= 0) {
         try {
-          const kucoinService = exchange as any
+          const kucoinService = exchange as KucoinService
           if (typeof kucoinService.getSeparateBalances === 'function') {
             const separateBalances = await kucoinService.getSeparateBalances(baseCurrency)
             console.log(`[TradingBot] Main account balance: ${separateBalances.mainAvailable} ${baseCurrency}`)

@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { getSymbolsByExchange } from '@/lib/symbols'
+import { useLock } from '@/contexts/LockContext'
 
 interface BotStatus {
   id: string
@@ -87,7 +88,34 @@ interface ApiTestResult {
   error?: string
 }
 
+interface MonitorLog {
+  id: string
+  level: string
+  message: string
+  createdAt: Date | string
+  data?: unknown
+}
+
+interface MonitorTrade {
+  id: string
+  symbol: string
+  side: string
+  price: number
+  size: number
+  status: string
+  openedAt: Date | string
+  profit: number | null
+}
+
+interface MonitorData {
+  status?: BotStatus | null
+  config?: BotConfig | null
+  logs?: MonitorLog[]
+  trades?: MonitorTrade[]
+}
+
 export default function Home() {
+  const { lock } = useLock()
   const [status, setStatus] = useState<BotStatus | null>(null)
   const [balance, setBalance] = useState<AccountBalance | null>(null)
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null)
@@ -447,6 +475,14 @@ export default function Home() {
             >
               {testingApi ? 'Testing...' : 'Test API Connection'}
             </Button>
+            <Button
+              onClick={lock}
+              variant="outline"
+              size="lg"
+              title="Lock page"
+            >
+              🔒 Lock
+            </Button>
           </div>
         </div>
 
@@ -804,7 +840,7 @@ export default function Home() {
                   <div>
                     <h4 className="text-sm font-semibold mb-2">Recent Trades</h4>
                     <div className="space-y-2">
-                      {monitorData.trades.slice(0, 3).map((trade) => (
+                      {monitorData.trades.slice(0, 3).map((trade: MonitorTrade) => (
                         <div
                           key={trade.id}
                           className="p-3 border rounded-lg bg-background"
@@ -858,7 +894,7 @@ export default function Home() {
                   <h4 className="text-sm font-semibold mb-2">Recent Activity Logs</h4>
                   <div className="space-y-2 max-h-[400px] overflow-y-auto border rounded-lg p-3 bg-background">
                     {monitorData.logs && monitorData.logs.length > 0 ? (
-                      monitorData.logs.map((log) => {
+                      monitorData.logs.map((log: MonitorLog) => {
                         const getLevelColor = (level: string) => {
                           switch (level) {
                             case 'error':
@@ -907,16 +943,16 @@ export default function Home() {
                                 <div className={`text-sm ${getLevelColor(log.level)}`}>
                                   {log.message}
                                 </div>
-                                {log.data && typeof log.data === 'object' && (
+                                {log.data && typeof log.data === 'object' ? (
                                   <details className="mt-1">
                                     <summary className="text-xs text-muted-foreground cursor-pointer">
                                       View details
                                     </summary>
                                     <pre className="mt-1 text-xs bg-muted p-2 rounded overflow-x-auto">
-                                      {JSON.stringify(log.data, null, 2)}
+                                      {JSON.stringify(log.data as Record<string, unknown>, null, 2)}
                                     </pre>
                                   </details>
-                                )}
+                                ) : null}
                               </div>
                             </div>
                           </div>

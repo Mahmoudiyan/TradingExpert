@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { getExchangeForSymbol, getExchangeByName } from '@/lib/exchange/router'
+import type { KucoinService } from '@/lib/kucoin'
 
 export async function GET(request: Request) {
   try {
@@ -56,7 +57,7 @@ export async function GET(request: Request) {
     if (isKuCoin) {
       // For KuCoin, get separate balances
       try {
-        const kucoinService = exchange as any
+        const kucoinService = exchange as KucoinService
         if (typeof kucoinService.getSeparateBalances === 'function') {
           const separateBalances = await kucoinService.getSeparateBalances(baseCurrency)
           mainBalance = separateBalances.main
