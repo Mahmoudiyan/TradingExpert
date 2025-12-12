@@ -25,9 +25,10 @@ export function LockProvider({ children }: { children: React.ReactNode }) {
   const [isLocked, setIsLocked] = useState(() => {
     if (typeof window !== 'undefined') {
       const savedLockState = localStorage.getItem(STORAGE_KEY)
-      return savedLockState !== 'unlocked'
+      // Only lock if explicitly set to 'locked', otherwise default to unlocked
+      return savedLockState === 'locked'
     }
-    return true // Start locked by default
+    return false // Start unlocked by default (user must manually lock)
   })
   
   const [autoLockEnabled, setAutoLockEnabledState] = useState(() => {

@@ -420,7 +420,13 @@ export class KucoinService implements ExchangeService {
         throw new Error(`KuCoin order response missing orderId/id: ${JSON.stringify(response.data)}`)
       }
       
-      return response.data
+      // Normalize KuCoin response to match Order interface
+      // KuCoin returns orderId, but our interface expects id
+      const orderData = response.data
+      return {
+        ...orderData,
+        id: orderData.orderId || orderData.id,
+      }
     } catch (error) {
       console.error('Error placing order:', error)
       throw error

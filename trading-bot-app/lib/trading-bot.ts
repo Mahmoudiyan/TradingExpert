@@ -143,30 +143,88 @@ export class TradingBot {
       }
 
       const exchange = getExchangeForSymbol(symbol, typeof config.exchange === 'string' ? config.exchange : undefined)
+      
+      // Format size according to exchange requirements
+      // KuCoin requires specific precision to match baseIncrement
+      // For ETH-USDT, typical increment is 0.001 (3 decimals), for smaller values use more precision
+      let formattedSize: string
+      if (exchange.getName() === 'KuCoin') {
+        // Determine appropriate precision based on size
+        // For sizes >= 0.01, use 3 decimals (increment 0.001)
+        // For sizes < 0.01, use 5 decimals (increment 0.00001)
+        // For sizes < 0.001, use 8 decimals
+        let decimals = 3
+        if (size < 0.01) {
+          decimals = 5
+        }
+        if (size < 0.001) {
+          decimals = 8
+        }
+        // Round to nearest increment
+        const multiplier = Math.pow(10, decimals)
+        const rounded = Math.floor(size * multiplier) / multiplier
+        formattedSize = rounded.toFixed(decimals).replace(/\.?0+$/, '') || '0'
+      } else {
+        formattedSize = size.toFixed(8)
+      }
+      
       const order = await exchange.placeMarketOrder(
         symbol,
         side,
-        size.toFixed(8)
+        formattedSize
       )
 
       // Validate order response
       if (!order) {
         throw new Error(`Order placement failed: exchange returned undefined order`)
       }
-      if (!order.id) {
-        throw new Error(`Order placement failed: order missing id field. Order data: ${JSON.stringify(order)}`)
+      // Accept both id and orderId (KuCoin uses orderId, interface expects id)
+      const orderId = order.id || (order as { orderId?: string }).orderId
+      if (!orderId) {
+        throw new Error(`Order placement failed: order missing id/orderId field. Order data: ${JSON.stringify(order)}`)
       }
 
-      // Save trade to database
+      // For market orders, fetch order details to get filled price and size
+      // Market orders might not immediately have price/filledSize in response
+      let orderDetails = order
+      let actualPrice = parseFloat(order.price || '0')
+      let actualSize = size
+      
+      try {
+        // Wait a moment for order to be processed and filled
+        await new Promise(resolve => setTimeout(resolve, 500))
+        orderDetails = await exchange.getOrder(orderId)
+        console.log(`[TradingBot] Order details fetched for ${orderId}:`, JSON.stringify(orderDetails, null, 2))
+        
+        // Get actual filled price and size
+        const filledSize = parseFloat(orderDetails.filledSize || '0')
+        const filledValue = parseFloat(orderDetails.filledValue || '0')
+        
+        if (filledSize > 0) {
+          actualPrice = filledValue / filledSize
+          actualSize = filledSize
+          console.log(`[TradingBot] Order filled: ${actualSize} @ ${actualPrice}`)
+        } else if (orderDetails.price) {
+          actualPrice = parseFloat(orderDetails.price)
+        }
+      } catch (fetchError) {
+        console.warn(`[TradingBot] Could not fetch order details for ${orderId}, using initial response:`, fetchError)
+        // Continue with initial order response or requested size
+        if (order.price) {
+          actualPrice = parseFloat(order.price)
+        }
+      }
+
+      // Save trade to database with actual filled price and size
       const trade = await prisma.trade.create({
         data: {
-          orderId: order.id,
+          orderId: orderId,
           symbol,
           side,
           type: 'market',
-          price: parseFloat(order.price || '0'),
-          size,
-          status: order.status || 'unknown',
+          price: actualPrice,
+          size: actualSize,
+          status: orderDetails.status || order.status || 'unknown',
         },
       })
 
@@ -174,8 +232,8 @@ export class TradingBot {
       await prisma.botLog.create({
         data: {
           level: 'info',
-          message: `Trade executed: ${side.toUpperCase()} ${size} ${symbol}`,
-          data: { orderId: order.id, tradeId: trade.id },
+          message: `Trade executed: ${side.toUpperCase()} ${actualSize} ${symbol} @ ${actualPrice}`,
+          data: { orderId: orderId, tradeId: trade.id, requestedSize: size, filledSize: actualSize, filledPrice: actualPrice },
         },
       })
 

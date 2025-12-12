@@ -16,6 +16,15 @@ export function LockWrapper({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState('')
   const [isUnlocking, setIsUnlocking] = useState(false)
 
+  // Reset password field when lock state changes
+  useEffect(() => {
+    if (isLocked) {
+      setPassword('')
+      setError('')
+      setIsUnlocking(false)
+    }
+  }, [isLocked])
+
   // Prevent access to internal pages when locked
   useEffect(() => {
     if (isLocked && pathname !== '/') {
@@ -100,7 +109,7 @@ export function LockWrapper({ children }: { children: React.ReactNode }) {
               <Button
                 type="submit"
                 className="w-full"
-                disabled={isUnlocking || password.length === 0}
+                disabled={isUnlocking}
               >
                 {isUnlocking ? 'Unlocking...' : 'Unlock'}
               </Button>
