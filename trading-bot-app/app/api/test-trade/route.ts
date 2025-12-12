@@ -171,6 +171,11 @@ export async function POST(request: Request) {
             } else if (testSize && testSize > 0) {
               tradeSize = testSize
             }
+          } catch (tickerError2) {
+            console.warn(`[Test Trade] Could not fetch ticker in fallback:`, tickerError2)
+            tradePrice = parseFloat(orderDetails.price || '0')
+            tradeSize = testSize || 0
+          }
         }
       }
     } else if (testSize) {
