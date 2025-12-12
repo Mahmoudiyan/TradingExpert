@@ -48,6 +48,7 @@ export default function BacktestPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<BacktestResult | null>(null)
+  const [creatingConfig, setCreatingConfig] = useState(false)
 
   const [formData, setFormData] = useState({
     exchange: 'KuCoin',
@@ -101,6 +102,52 @@ export default function BacktestPage() {
       alert(`Error: ${errorMessage}`)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleCreateConfig = async () => {
+    if (!result) return
+    
+    setCreatingConfig(true)
+    try {
+      // Create config from backtest parameters
+      const configData = {
+        exchange: formData.exchange,
+        symbol: formData.symbol,
+        timeframe: formData.timeframe,
+        fastMA: formData.fastMA,
+        slowMA: formData.slowMA,
+        riskPercent: formData.riskPercent,
+        stopLossPips: formData.stopLossPips,
+        takeProfitPips: formData.takeProfitPips,
+        maxDailyLoss: 4.0, // Default values
+        maxDailyProfit: 8.0,
+        maxSpreadPips: 3.0,
+        maxBalancePercent: 50.0,
+        allowBuy: formData.allowBuy,
+        allowSell: formData.allowSell,
+        isActive: false, // Don't activate automatically
+        strategyType: formData.strategyType,
+      }
+
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configData),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to create config')
+      }
+
+      alert('Configuration created successfully! You can activate it in the Config page.')
+      router.push('/config')
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      alert(`Error creating config: ${errorMessage}`)
+    } finally {
+      setCreatingConfig(false)
     }
   }
 
@@ -366,6 +413,17 @@ export default function BacktestPage() {
           <div className="lg:col-span-2 space-y-6">
             {result && (
               <>
+                {/* Action Button */}
+                <div className="flex justify-end mb-4">
+                  <Button
+                    onClick={handleCreateConfig}
+                    disabled={creatingConfig}
+                    className="bg-green-600 hover:bg-green-700"
+                  >
+                    {creatingConfig ? 'Creating...' : 'Create Config from Backtest'}
+                  </Button>
+                </div>
+
                 {/* Strategy Info */}
                 {result.strategyUsed && (
                   <Card>

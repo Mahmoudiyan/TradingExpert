@@ -82,6 +82,22 @@ export interface ExchangeService {
   // Get open orders
   getOpenOrders(symbol?: string): Promise<Order[]>
   
+  // Place stop-loss order (for protecting open positions)
+  placeStopLossOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    stopPrice: string,
+    size: string
+  ): Promise<Order>
+  
+  // Place take-profit order (for protecting open positions)
+  placeTakeProfitOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    takeProfitPrice: string,
+    size: string
+  ): Promise<Order>
+  
   // Detect if symbol is supported by this exchange
   isSymbolSupported(symbol: string): boolean
   

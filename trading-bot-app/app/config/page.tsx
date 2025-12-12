@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Combobox } from '@/components/ui/combobox'
+import { Slider } from '@/components/ui/slider'
 import { getSymbolsByExchange } from '@/lib/symbols'
 
 interface BotConfig {
@@ -29,6 +30,14 @@ interface BotConfig {
   allowSell: boolean
   isActive: boolean
   strategyType?: 'ema-only' | 'ema-rsi' | 'ema-rsi-trend' | 'mean-reversion' | 'momentum' | 'multi-timeframe-trend'
+}
+
+interface AccountBalance {
+  balance: number
+  currency: string
+  availableBalance: number
+  totalBalance: number
+  exchange: string
 }
 
 export default function ConfigPage() {
@@ -98,6 +107,10 @@ export default function ConfigPage() {
     )
   }
 
+  // Find active config or use default
+  const activeConfig = configs.find(c => c.isActive) || defaultConfig
+  const hasActiveConfig = configs.some(c => c.isActive)
+
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-4xl mx-auto space-y-6">
@@ -108,19 +121,44 @@ export default function ConfigPage() {
           </Button>
         </div>
 
-        <ConfigForm config={defaultConfig} onSave={handleSave} saving={saving} />
+        {/* Show active config if exists, otherwise show default form for creating new config */}
+        <ConfigForm 
+          config={activeConfig} 
+          onSave={handleSave} 
+          saving={saving}
+          isNewConfig={!hasActiveConfig}
+        />
 
-        {configs.length > 0 && (
+        {/* Show other configs in a collapsed list (optional - can be removed if not needed) */}
+        {configs.length > 1 && (
           <div className="space-y-4">
-            <h2 className="text-2xl font-semibold text-foreground">Existing Configurations</h2>
-            {configs.map((config) => (
-              <ConfigForm
-                key={config.id}
-                config={config}
-                onSave={handleSave}
-                saving={saving}
-              />
-            ))}
+            <h2 className="text-2xl font-semibold text-foreground">Other Configurations</h2>
+            <div className="space-y-2">
+              {configs
+                .filter(c => !c.isActive)
+                .map((config) => (
+                  <Card key={config.id} className="p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold">{config.symbol} on {config.exchange}</div>
+                        <div className="text-sm text-muted-foreground">
+                          {config.timeframe} • MA({config.fastMA}/{config.slowMA}) • Risk: {config.riskPercent}%
+                        </div>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          // Activate this config
+                          handleSave({ ...config, isActive: true })
+                        }}
+                      >
+                        Activate
+                      </Button>
+                    </div>
+                  </Card>
+                ))}
+            </div>
           </div>
         )}
       </div>
@@ -128,8 +166,11 @@ export default function ConfigPage() {
   )
 }
 
-function ConfigForm({ config, onSave, saving }: { config: BotConfig; onSave: (config: BotConfig) => void; saving: boolean }) {
+function ConfigForm({ config, onSave, saving, isNewConfig = false }: { config: BotConfig; onSave: (config: BotConfig) => void; saving: boolean; isNewConfig?: boolean }) {
   const [formData, setFormData] = useState<BotConfig>(config)
+  const [balance, setBalance] = useState<AccountBalance | null>(null)
+  const [balanceExchange, setBalanceExchange] = useState<string>(config.exchange || 'KuCoin')
+  const [refreshingBalance, setRefreshingBalance] = useState(false)
   
   // Get symbols filtered by selected exchange
   const availableSymbols = getSymbolsByExchange(formData.exchange || 'KuCoin')
@@ -145,13 +186,39 @@ function ConfigForm({ config, onSave, saving }: { config: BotConfig; onSave: (co
       exchange,
       symbol: isSymbolAvailable ? currentSymbol : (newSymbols[0]?.value || ''),
     })
+    setBalanceExchange(exchange)
+    setBalance(null)
+  }
+
+  const fetchBalance = async () => {
+    setRefreshingBalance(true)
+    try {
+      const params = new URLSearchParams()
+      params.append('exchange', balanceExchange)
+      const res = await fetch(`/api/balance?${params.toString()}`)
+      const data = await res.json()
+      if (!data.error) {
+        setBalance(data)
+        if (data.exchange) {
+          setBalanceExchange(data.exchange)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching balance:', error)
+    } finally {
+      setRefreshingBalance(false)
+    }
   }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Configuration</CardTitle>
-        <CardDescription>Set up your trading bot parameters</CardDescription>
+        <CardTitle>{isNewConfig ? 'New Configuration' : 'Active Configuration'}</CardTitle>
+        <CardDescription>
+          {isNewConfig 
+            ? 'Set up your trading bot parameters. Make sure to mark as Active when ready.'
+            : 'Current active trading bot configuration. Changes will be saved immediately.'}
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <form
@@ -324,20 +391,166 @@ function ConfigForm({ config, onSave, saving }: { config: BotConfig; onSave: (co
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="maxBalancePercent">Max Balance for Trading (%)</Label>
-              <Input
-                id="maxBalancePercent"
-                type="number"
-                step="1"
-                min="10"
-                max="100"
-                value={formData.maxBalancePercent || 50}
-                onChange={(e) => setFormData({ ...formData, maxBalancePercent: parseFloat(e.target.value) })}
-              />
-              <p className="text-xs text-muted-foreground">
-                Percentage of total account balance to allocate for trading (10-100%)
+          </div>
+
+          {/* Risk Management Section */}
+          <div className="pt-6 border-t space-y-6">
+            <div>
+              <h3 className="text-lg font-semibold mb-2">Risk Management</h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                Configure risk settings and trading limits. Connect your exchange to see calculated values.
               </p>
+              
+              {/* Balance Connection */}
+              <div className="mb-6 p-4 bg-muted rounded-lg space-y-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 space-y-2">
+                    <Label htmlFor="balanceExchange">Exchange for Balance Calculation</Label>
+                    <Select
+                      value={balanceExchange}
+                      onValueChange={(value) => {
+                        setBalanceExchange(value)
+                        setBalance(null)
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="KuCoin">KuCoin (Crypto - USDT)</SelectItem>
+                        <SelectItem value="OANDA">OANDA (Forex - USD)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      type="button"
+                      onClick={fetchBalance}
+                      disabled={refreshingBalance}
+                      variant="outline"
+                    >
+                      {refreshingBalance ? 'Loading...' : 'Load Balance'}
+                    </Button>
+                  </div>
+                </div>
+                {balance && (
+                  <div className="text-sm text-muted-foreground">
+                    Total Balance: <span className="font-semibold text-foreground">{balance.totalBalance.toFixed(2)} {balance.currency}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="maxBalancePercent">
+                      Max Balance for Trading: {formData.maxBalancePercent || 50}%
+                    </Label>
+                    {balance && (
+                      <span className="text-sm text-muted-foreground">
+                        {(balance.totalBalance * ((formData.maxBalancePercent || 50) / 100)).toFixed(2)} {balance.currency}
+                      </span>
+                    )}
+                  </div>
+                  <Slider
+                    id="maxBalancePercent"
+                    value={formData.maxBalancePercent || 50}
+                    onValueChange={(value) => setFormData({ ...formData, maxBalancePercent: value })}
+                    min={10}
+                    max={100}
+                    step={5}
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Conservative (10%)</span>
+                    <span>Moderate (50%)</span>
+                    <span>Aggressive (100%)</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="riskPercent">
+                      Risk per Trade: {formData.riskPercent}%
+                    </Label>
+                  </div>
+                  <Slider
+                    id="riskPercent"
+                    value={formData.riskPercent}
+                    onValueChange={(value) => setFormData({ ...formData, riskPercent: value })}
+                    min={0.5}
+                    max={5}
+                    step={0.1}
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Low (0.5%)</span>
+                    <span>Medium (2%)</span>
+                    <span>High (5%)</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="maxDailyLoss">
+                        Max Daily Loss: {formData.maxDailyLoss}%
+                      </Label>
+                    </div>
+                    <Slider
+                      id="maxDailyLoss"
+                      value={formData.maxDailyLoss}
+                      onValueChange={(value) => setFormData({ ...formData, maxDailyLoss: value })}
+                      min={1}
+                      max={10}
+                      step={0.5}
+                    />
+                    {balance && (
+                      <div className="text-xs text-muted-foreground">
+                        Limit: {(balance.totalBalance * (formData.maxDailyLoss / 100)).toFixed(2)} {balance.currency}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="maxDailyProfit">
+                        Max Daily Profit: {formData.maxDailyProfit}%
+                      </Label>
+                    </div>
+                    <Slider
+                      id="maxDailyProfit"
+                      value={formData.maxDailyProfit}
+                      onValueChange={(value) => setFormData({ ...formData, maxDailyProfit: value })}
+                      min={5}
+                      max={20}
+                      step={0.5}
+                    />
+                    {balance && (
+                      <div className="text-xs text-muted-foreground">
+                        Target: {(balance.totalBalance * (formData.maxDailyProfit / 100)).toFixed(2)} {balance.currency}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {balance && (
+                  <div className="pt-4 border-t">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <div className="text-muted-foreground">Daily Loss Limit</div>
+                        <div className="text-lg font-semibold text-red-600 dark:text-red-400">
+                          {(balance.totalBalance * (formData.maxDailyLoss / 100)).toFixed(2)} {balance.currency}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Daily Profit Target</div>
+                        <div className="text-lg font-semibold text-green-600 dark:text-green-400">
+                          {(balance.totalBalance * (formData.maxDailyProfit / 100)).toFixed(2)} {balance.currency}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

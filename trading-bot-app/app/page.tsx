@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { getSymbolsByExchange } from '@/lib/symbols'
@@ -28,6 +27,11 @@ interface AccountBalance {
   availableBalance: number
   totalBalance: number
   exchange: string
+  // KuCoin-specific: separate balances
+  mainBalance?: number
+  tradeBalance?: number
+  mainAvailable?: number
+  tradeAvailable?: number
   // Note: Balance is not symbol-specific - it's the total account balance
 }
 
@@ -36,6 +40,26 @@ interface RiskSettings {
   maxDailyLoss: number
   maxDailyProfit: number
   riskPercent: number
+}
+
+interface BotConfig {
+  id: string
+  exchange: string
+  symbol: string
+  fastMA: number
+  slowMA: number
+  timeframe: string
+  riskPercent: number
+  stopLossPips: number
+  takeProfitPips: number
+  maxDailyLoss: number
+  maxDailyProfit: number
+  maxSpreadPips: number
+  maxBalancePercent: number
+  allowBuy: boolean
+  allowSell: boolean
+  isActive: boolean
+  strategyType?: string
 }
 
 interface ApiTestResult {
@@ -67,15 +91,17 @@ export default function Home() {
   const [status, setStatus] = useState<BotStatus | null>(null)
   const [balance, setBalance] = useState<AccountBalance | null>(null)
   const [riskSettings, setRiskSettings] = useState<RiskSettings | null>(null)
+  const [activeConfig, setActiveConfig] = useState<BotConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [testingApi, setTestingApi] = useState(false)
   const [apiTestResult, setApiTestResult] = useState<ApiTestResult | null>(null)
-  const [savingRisk, setSavingRisk] = useState(false)
   const [testExchange, setTestExchange] = useState<string>('KuCoin')
   const [testSymbol, setTestSymbol] = useState<string>('BTC-USDT')
   const [refreshingBalance, setRefreshingBalance] = useState(false)
   const [balanceExchange, setBalanceExchange] = useState<string>('KuCoin')
+  const [monitorData, setMonitorData] = useState<MonitorData | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const monitorIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const fetchingRef = useRef(false)
   const hasSetupRef = useRef(false)
 
@@ -112,21 +138,24 @@ export default function Home() {
       
       if (configRes.ok) {
         const configs = await configRes.json()
-        const activeConfig = configs.find((c: { isActive?: boolean }) => c.isActive) || configs[0]
-        if (activeConfig) {
+        const activeConfigData = configs.find((c: { isActive?: boolean }) => c.isActive) || configs[0]
+        if (activeConfigData) {
+          setActiveConfig(activeConfigData as BotConfig)
           setRiskSettings({
-            maxBalancePercent: activeConfig.maxBalancePercent || 50,
-            maxDailyLoss: activeConfig.maxDailyLoss || 4.0,
-            maxDailyProfit: activeConfig.maxDailyProfit || 8.0,
-            riskPercent: activeConfig.riskPercent || 1.5,
+            maxBalancePercent: activeConfigData.maxBalancePercent || 50,
+            maxDailyLoss: activeConfigData.maxDailyLoss || 4.0,
+            maxDailyProfit: activeConfigData.maxDailyProfit || 8.0,
+            riskPercent: activeConfigData.riskPercent || 1.5,
           })
           // Use exchange from active config if available, otherwise use current balanceExchange
-          if (activeConfig.exchange) {
-            exchangeToUse = activeConfig.exchange
+          if (activeConfigData.exchange) {
+            exchangeToUse = activeConfigData.exchange
             if (!balanceExchange || isInitial) {
-              setBalanceExchange(activeConfig.exchange)
+              setBalanceExchange(activeConfigData.exchange)
             }
           }
+        } else {
+          setActiveConfig(null)
         }
       }
       
@@ -167,6 +196,27 @@ export default function Home() {
     }
   }, [balanceExchange])
 
+  // Fetch monitoring data (logs, trades, status)
+  const fetchMonitorData = useCallback(async () => {
+    if (!status?.isRunning) {
+      setMonitorData(null)
+      return
+    }
+
+    try {
+      const res = await fetch('/api/monitor?logsLimit=20&tradesLimit=5', {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setMonitorData(data)
+      }
+    } catch (error) {
+      console.error('Error fetching monitor data:', error)
+    }
+  }, [status?.isRunning])
+
   useEffect(() => {
     // Prevent multiple setups (React Strict Mode can cause double mount in dev)
     if (hasSetupRef.current) {
@@ -205,6 +255,45 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Empty deps - we only want this to run once on mount
 
+  // Separate effect for monitoring interval based on bot status and timeframe
+  useEffect(() => {
+    if (monitorIntervalRef.current) {
+      clearInterval(monitorIntervalRef.current)
+      monitorIntervalRef.current = null
+    }
+
+    if (status?.isRunning && activeConfig) {
+      // Get update interval based on timeframe (similar to bot check interval)
+      const getMonitorInterval = (timeframe: string): number => {
+        const intervalMap: Record<string, number> = {
+          '1min': 10000,    // 10 seconds for 1min
+          '5min': 20000,    // 20 seconds for 5min
+          '15min': 30000,   // 30 seconds for 15min
+          '30min': 60000,   // 60 seconds for 30min
+          '1hour': 120000,  // 2 minutes for 1hour
+          '4hour': 300000,  // 5 minutes for 4hour
+          '1day': 600000,   // 10 minutes for 1day
+        }
+        return intervalMap[timeframe] || 30000 // Default 30 seconds
+      }
+
+      const interval = getMonitorInterval(activeConfig.timeframe)
+      fetchMonitorData() // Fetch immediately
+      monitorIntervalRef.current = setInterval(() => {
+        fetchMonitorData()
+      }, interval)
+    } else {
+      setMonitorData(null)
+    }
+
+    return () => {
+      if (monitorIntervalRef.current) {
+        clearInterval(monitorIntervalRef.current)
+        monitorIntervalRef.current = null
+      }
+    }
+  }, [status?.isRunning, activeConfig?.timeframe, fetchMonitorData])
+
   const handleStart = async () => {
     try {
       await fetch('/api/bot/start', { method: 'POST' })
@@ -216,7 +305,38 @@ export default function Home() {
 
   const handleStop = async () => {
     try {
-      await fetch('/api/bot/stop', { method: 'POST' })
+      // Check for open trades first
+      const tradesRes = await fetch('/api/trades?limit=100')
+      const trades = tradesRes.ok ? await tradesRes.json() : []
+      const openTrades = trades.filter((t: { status: string }) => 
+        t.status === 'pending' || t.status === 'filled'
+      )
+
+      let closeOpenTrades = false
+      if (openTrades.length > 0) {
+        const filledTrades = openTrades.filter((t: { status: string }) => t.status === 'filled')
+        const pendingTrades = openTrades.filter((t: { status: string }) => t.status === 'pending')
+        
+        let message = `Bot has ${openTrades.length} open trade(s):\n`
+        if (pendingTrades.length > 0) {
+          message += `- ${pendingTrades.length} pending order(s) will be cancelled\n`
+        }
+        if (filledTrades.length > 0) {
+          message += `- ${filledTrades.length} filled trade(s) will be protected with stop-loss/take-profit orders\n\n`
+        }
+        message += `Choose an option:\n`
+        message += `OK = Close all (cancel pending, filled trades remain open)\n`
+        message += `Cancel = Protect filled trades with stop-loss/take-profit orders`
+        
+        const shouldClose = window.confirm(message)
+        closeOpenTrades = shouldClose
+      }
+
+      await fetch('/api/bot/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ closeOpenTrades }),
+      })
       setTimeout(() => fetchStatus(false), 1000)
     } catch (error) {
       console.error('Error stopping bot:', error)
@@ -271,37 +391,6 @@ export default function Home() {
     }
   }
 
-  const handleSaveRiskSettings = async () => {
-    if (!riskSettings) return
-    
-    setSavingRisk(true)
-    try {
-      // Get active config
-      const configRes = await fetch('/api/config')
-      const configs = await configRes.json()
-      const activeConfig = configs.find((c: { isActive?: boolean }) => c.isActive) || configs[0]
-      
-      if (activeConfig) {
-        await fetch('/api/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...activeConfig,
-            maxBalancePercent: riskSettings.maxBalancePercent,
-            maxDailyLoss: riskSettings.maxDailyLoss,
-            maxDailyProfit: riskSettings.maxDailyProfit,
-            riskPercent: riskSettings.riskPercent,
-          }),
-        })
-        alert('Risk settings saved!')
-      }
-    } catch (error) {
-      console.error('Error saving risk settings:', error)
-      alert('Error saving risk settings')
-    } finally {
-      setSavingRisk(false)
-    }
-  }
 
   if (loading) {
     return (
@@ -471,30 +560,62 @@ export default function Home() {
               </div>
             </div>
             {balance ? (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="space-y-2">
-                  <div className="text-sm text-muted-foreground">Total Balance</div>
-                  <div className="text-3xl font-bold text-foreground">
-                    {balance.totalBalance.toFixed(2)} {balance.currency}
+              <div className="space-y-4">
+                {/* For KuCoin, show separate main and trade balances */}
+                {balance.exchange === 'KuCoin' && (balance.mainBalance !== undefined || balance.tradeBalance !== undefined) ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                    <div className="p-4 border rounded-lg">
+                      <div className="text-sm text-muted-foreground mb-2">Main Account</div>
+                      <div className="text-2xl font-bold text-foreground">
+                        {(balance.mainBalance || 0).toFixed(8)} {balance.currency}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Available: {(balance.mainAvailable || 0).toFixed(8)} {balance.currency}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Used for deposits/withdrawals
+                      </div>
+                    </div>
+                    <div className="p-4 border rounded-lg bg-green-50 dark:bg-green-950/20">
+                      <div className="text-sm text-muted-foreground mb-2">Trade Account</div>
+                      <div className="text-2xl font-bold text-green-600 dark:text-green-400">
+                        {(balance.tradeBalance || 0).toFixed(8)} {balance.currency}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Available: {(balance.tradeAvailable || 0).toFixed(8)} {balance.currency}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Used for trading (auto-transfers from main when needed)
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <div className="text-sm text-muted-foreground">Available Balance</div>
-                  <div className="text-3xl font-bold text-green-600 dark:text-green-400">
-                    {balance.availableBalance.toFixed(2)} {balance.currency}
-                  </div>
-                </div>
-                {riskSettings && (
+                ) : null}
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div className="space-y-2">
-                    <div className="text-sm text-muted-foreground">Allocated for Trading</div>
-                    <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">
-                      {(balance.totalBalance * (riskSettings.maxBalancePercent / 100)).toFixed(2)} {balance.currency}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {riskSettings.maxBalancePercent}% of total balance
+                    <div className="text-sm text-muted-foreground">Total Balance</div>
+                    <div className="text-3xl font-bold text-foreground">
+                      {balance.totalBalance.toFixed(2)} {balance.currency}
                     </div>
                   </div>
-                )}
+                  <div className="space-y-2">
+                    <div className="text-sm text-muted-foreground">Available Balance</div>
+                    <div className="text-3xl font-bold text-green-600 dark:text-green-400">
+                      {balance.availableBalance.toFixed(2)} {balance.currency}
+                    </div>
+                  </div>
+                  {riskSettings && (
+                    <div className="space-y-2">
+                      <div className="text-sm text-muted-foreground">Allocated for Trading</div>
+                      <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">
+                        {(balance.totalBalance * (riskSettings.maxBalancePercent / 100)).toFixed(2)} {balance.currency}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {riskSettings.maxBalancePercent}% of total balance
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             ) : (
               <div className="text-center py-8 text-muted-foreground">
@@ -504,131 +625,6 @@ export default function Home() {
           </CardContent>
         </Card>
 
-        {/* Risk Management Card */}
-        {riskSettings && balance && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-2xl">Risk Management</CardTitle>
-              <CardDescription>Configure risk settings and trading limits</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="maxBalancePercent">
-                      Max Balance for Trading: {riskSettings.maxBalancePercent}%
-                    </Label>
-                    <span className="text-sm text-muted-foreground">
-                      {(balance.totalBalance * (riskSettings.maxBalancePercent / 100)).toFixed(2)} {balance.currency}
-                    </span>
-                  </div>
-                  <Slider
-                    id="maxBalancePercent"
-                    value={riskSettings.maxBalancePercent}
-                    onValueChange={(value) => 
-                      setRiskSettings({ ...riskSettings, maxBalancePercent: value })
-                    }
-                    min={10}
-                    max={100}
-                    step={5}
-                  />
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Conservative (10%)</span>
-                    <span>Moderate (50%)</span>
-                    <span>Aggressive (100%)</span>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="riskPercent">
-                      Risk per Trade: {riskSettings.riskPercent}%
-                    </Label>
-                  </div>
-                  <Slider
-                    id="riskPercent"
-                    value={riskSettings.riskPercent}
-                    onValueChange={(value) => 
-                      setRiskSettings({ ...riskSettings, riskPercent: value })
-                    }
-                    min={0.5}
-                    max={5}
-                    step={0.1}
-                  />
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Low (0.5%)</span>
-                    <span>Medium (2%)</span>
-                    <span>High (5%)</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="maxDailyLoss">
-                        Max Daily Loss: {riskSettings.maxDailyLoss}%
-                      </Label>
-                    </div>
-                    <Slider
-                      id="maxDailyLoss"
-                      value={riskSettings.maxDailyLoss}
-                      onValueChange={(value) => 
-                        setRiskSettings({ ...riskSettings, maxDailyLoss: value })
-                      }
-                      min={1}
-                      max={10}
-                      step={0.5}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="maxDailyProfit">
-                        Max Daily Profit: {riskSettings.maxDailyProfit}%
-                      </Label>
-                    </div>
-                    <Slider
-                      id="maxDailyProfit"
-                      value={riskSettings.maxDailyProfit}
-                      onValueChange={(value) => 
-                        setRiskSettings({ ...riskSettings, maxDailyProfit: value })
-                      }
-                      min={5}
-                      max={20}
-                      step={0.5}
-                    />
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <div className="text-muted-foreground">Daily Loss Limit</div>
-                      <div className="text-lg font-semibold text-red-600 dark:text-red-400">
-                        {(balance.totalBalance * (riskSettings.maxDailyLoss / 100)).toFixed(2)} {balance.currency}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-muted-foreground">Daily Profit Target</div>
-                      <div className="text-lg font-semibold text-green-600 dark:text-green-400">
-                        {(balance.totalBalance * (riskSettings.maxDailyProfit / 100)).toFixed(2)} {balance.currency}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <Button 
-                  onClick={handleSaveRiskSettings} 
-                  disabled={savingRisk}
-                  className="w-full"
-                  size="lg"
-                >
-                  {savingRisk ? 'Saving...' : 'Save Risk Settings'}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
 
         {/* Bot Status Card */}
         <Card>
@@ -693,8 +689,250 @@ export default function Home() {
                 Last Check: {new Date(status.lastCheck).toLocaleString()}
               </div>
             )}
+
+            {/* Bot Configuration Settings */}
+            {activeConfig && status?.isRunning && (
+              <div className="mt-6 pt-6 border-t">
+                <h3 className="text-lg font-semibold mb-4">Active Bot Configuration</h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Exchange</div>
+                    <div className="text-sm font-medium">{activeConfig.exchange}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Symbol</div>
+                    <div className="text-sm font-medium">{activeConfig.symbol}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Timeframe</div>
+                    <div className="text-sm font-medium">{activeConfig.timeframe}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Fast MA / Slow MA</div>
+                    <div className="text-sm font-medium">{activeConfig.fastMA} / {activeConfig.slowMA}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Risk per Trade</div>
+                    <div className="text-sm font-medium">{activeConfig.riskPercent}%</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Stop Loss</div>
+                    <div className="text-sm font-medium">{activeConfig.stopLossPips} pips</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Take Profit</div>
+                    <div className="text-sm font-medium">{activeConfig.takeProfitPips} pips</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Max Spread</div>
+                    <div className="text-sm font-medium">{activeConfig.maxSpreadPips} pips</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Max Daily Loss</div>
+                    <div className="text-sm font-medium">{activeConfig.maxDailyLoss}%</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Max Daily Profit</div>
+                    <div className="text-sm font-medium">{activeConfig.maxDailyProfit}%</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Trade Direction</div>
+                    <div className="text-sm font-medium">
+                      {activeConfig.allowBuy && activeConfig.allowSell ? 'Both' : activeConfig.allowBuy ? 'Buy Only' : 'Sell Only'}
+                    </div>
+                  </div>
+                  {activeConfig.strategyType && (
+                    <div className="space-y-1">
+                      <div className="text-xs text-muted-foreground">Strategy</div>
+                      <div className="text-sm font-medium capitalize">
+                        {activeConfig.strategyType.replace(/-/g, ' ')}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
+
+        {/* Bot Activity Monitor - Only show when bot is running */}
+        {status?.isRunning && monitorData && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Bot Activity Monitor</CardTitle>
+              <CardDescription>
+                Real-time bot activity, logs, and recent trades
+                {activeConfig && ` (updating every ${activeConfig.timeframe === '1min' ? '10s' : activeConfig.timeframe === '5min' ? '20s' : activeConfig.timeframe === '15min' ? '30s' : activeConfig.timeframe === '30min' ? '1min' : activeConfig.timeframe === '1hour' ? '2min' : activeConfig.timeframe === '4hour' ? '5min' : '10min'})`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-6">
+                {/* Status Summary */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/50 rounded-lg">
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Last Check</div>
+                    <div className="text-sm font-medium">
+                      {monitorData.status?.lastCheck
+                        ? new Date(monitorData.status.lastCheck).toLocaleTimeString()
+                        : 'Never'}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Total Trades</div>
+                    <div className="text-sm font-medium">{monitorData.status?.totalTrades || 0}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Win Rate</div>
+                    <div className="text-sm font-medium">
+                      {monitorData.status && monitorData.status.totalTrades > 0
+                        ? `${((monitorData.status.winningTrades / monitorData.status.totalTrades) * 100).toFixed(1)}%`
+                        : '0%'}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Last Trade</div>
+                    <div className="text-sm font-medium">
+                      {monitorData.status?.lastTrade
+                        ? new Date(monitorData.status.lastTrade).toLocaleTimeString()
+                        : 'None'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Recent Trades */}
+                {monitorData.trades && monitorData.trades.length > 0 && (
+                  <div>
+                    <h4 className="text-sm font-semibold mb-2">Recent Trades</h4>
+                    <div className="space-y-2">
+                      {monitorData.trades.slice(0, 3).map((trade) => (
+                        <div
+                          key={trade.id}
+                          className="p-3 border rounded-lg bg-background"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Badge variant={trade.side === 'buy' ? 'default' : 'secondary'}>
+                                {trade.side.toUpperCase()}
+                              </Badge>
+                              <span className="text-sm font-medium">{trade.symbol}</span>
+                              <span className="text-xs text-muted-foreground">
+                                @ ${trade.price.toFixed(2)}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(trade.openedAt).toLocaleTimeString()}
+                              </span>
+                              {trade.profit !== null && (
+                                <span
+                                  className={`text-sm font-semibold ${
+                                    trade.profit >= 0
+                                      ? 'text-green-600 dark:text-green-400'
+                                      : 'text-red-600 dark:text-red-400'
+                                  }`}
+                                >
+                                  {trade.profit >= 0 ? '+' : ''}${trade.profit.toFixed(2)}
+                                </span>
+                              )}
+                              <Badge
+                                variant={
+                                  trade.status === 'filled'
+                                    ? 'default'
+                                    : trade.status === 'pending'
+                                    ? 'outline'
+                                    : 'secondary'
+                                }
+                              >
+                                {trade.status}
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent Logs */}
+                <div>
+                  <h4 className="text-sm font-semibold mb-2">Recent Activity Logs</h4>
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto border rounded-lg p-3 bg-background">
+                    {monitorData.logs && monitorData.logs.length > 0 ? (
+                      monitorData.logs.map((log) => {
+                        const getLevelColor = (level: string) => {
+                          switch (level) {
+                            case 'error':
+                              return 'text-red-600 dark:text-red-400'
+                            case 'warning':
+                              return 'text-yellow-600 dark:text-yellow-400'
+                            default:
+                              return 'text-blue-600 dark:text-blue-400'
+                          }
+                        }
+                        const getLevelIcon = (level: string) => {
+                          switch (level) {
+                            case 'error':
+                              return '❌'
+                            case 'warning':
+                              return '⚠️'
+                            default:
+                              return 'ℹ️'
+                          }
+                        }
+                        return (
+                          <div
+                            key={log.id}
+                            className="p-2 border-b last:border-b-0 hover:bg-muted/50 rounded transition-colors"
+                          >
+                            <div className="flex items-start gap-2">
+                              <span className="text-xs">{getLevelIcon(log.level)}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Badge
+                                    variant={
+                                      log.level === 'error'
+                                        ? 'destructive'
+                                        : log.level === 'warning'
+                                        ? 'outline'
+                                        : 'default'
+                                    }
+                                    className="text-xs"
+                                  >
+                                    {log.level.toUpperCase()}
+                                  </Badge>
+                                  <span className="text-xs text-muted-foreground">
+                                    {new Date(log.createdAt).toLocaleString()}
+                                  </span>
+                                </div>
+                                <div className={`text-sm ${getLevelColor(log.level)}`}>
+                                  {log.message}
+                                </div>
+                                {log.data && typeof log.data === 'object' && (
+                                  <details className="mt-1">
+                                    <summary className="text-xs text-muted-foreground cursor-pointer">
+                                      View details
+                                    </summary>
+                                    <pre className="mt-1 text-xs bg-muted p-2 rounded overflow-x-auto">
+                                      {JSON.stringify(log.data, null, 2)}
+                                    </pre>
+                                  </details>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <div className="text-center py-8 text-muted-foreground text-sm">
+                        No logs yet
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Navigation Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

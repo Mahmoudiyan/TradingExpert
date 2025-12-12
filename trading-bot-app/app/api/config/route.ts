@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
+import { tradingBot } from '@/lib/trading-bot'
 
 export async function GET() {
   try {
@@ -86,6 +87,22 @@ export async function POST(request: Request) {
       update: filteredBody,
       create: filteredBody,
     })
+
+    // If bot is running and config was updated (especially timeframe), restart bot to apply new interval
+    const status = await prisma.botStatus.findUnique({
+      where: { id: 'main' },
+    })
+
+    if (status?.isRunning && config.isActive) {
+      // Check if timeframe changed (this would require storing previous timeframe, so we'll just restart if active)
+      // Restart bot to apply new interval based on timeframe
+      try {
+        await tradingBot.restart()
+      } catch (restartError) {
+        console.error('Error restarting bot after config update:', restartError)
+        // Don't fail the config update if restart fails
+      }
+    }
 
     return NextResponse.json(config)
   } catch (error: unknown) {

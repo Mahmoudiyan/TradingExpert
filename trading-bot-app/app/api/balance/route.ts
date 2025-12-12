@@ -43,63 +43,79 @@ export async function GET(request: Request) {
     console.log('[Balance API] All accounts received:', accounts.length)
     console.log('[Balance API] Account details:', JSON.stringify(accounts, null, 2))
     
-    // For KuCoin, balance can be in "main" or "trade" accounts
-    // We should sum all accounts of the base currency across all account types
-    // Filter accounts by the base currency (case-insensitive)
-    const baseCurrencyAccounts = accounts.filter(acc => 
-      (acc.currency || '').toUpperCase() === baseCurrency.toUpperCase()
-    )
-    
-    console.log('[Balance API] Base currency accounts found:', baseCurrencyAccounts.length)
-    
-    // Sum all balances for the base currency across all account types
+    // For KuCoin, show separate main and trade balances
+    const isKuCoin = exchange.getName() === 'KuCoin'
     let totalBalance = 0
     let availableBalance = 0
     let finalCurrency = baseCurrency
+    let mainBalance = 0
+    let tradeBalance = 0
+    let mainAvailable = 0
+    let tradeAvailable = 0
     
-    if (baseCurrencyAccounts.length > 0) {
-      // Sum all balances and available amounts
-      totalBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.balance || '0'), 0)
-      availableBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.available || '0'), 0)
-      
-      console.log('[Balance API] Summed balances for', baseCurrency, '- total:', totalBalance, 'available:', availableBalance)
-      console.log('[Balance API] Account breakdown:', baseCurrencyAccounts.map(acc => ({
-        type: acc.type,
-        balance: acc.balance,
-        available: acc.available
-      })))
-      
-      // If we still have 0, try to find the account with the highest balance
-      if (totalBalance === 0 && availableBalance === 0) {
-        console.log('[Balance API] No balance found in base currency, checking all accounts')
-        // Try to find any account with balance > 0
-        const accountWithBalance = accounts.find(acc => parseFloat(acc.balance || '0') > 0)
-        if (accountWithBalance) {
-          totalBalance = parseFloat(accountWithBalance.balance || '0')
-          availableBalance = parseFloat(accountWithBalance.available || '0')
-          finalCurrency = accountWithBalance.currency || baseCurrency
-          console.log('[Balance API] Found account with balance:', {
-            currency: finalCurrency,
-            type: accountWithBalance.type,
-            balance: totalBalance,
-            available: availableBalance
+    if (isKuCoin) {
+      // For KuCoin, get separate balances
+      try {
+        const kucoinService = exchange as any
+        if (typeof kucoinService.getSeparateBalances === 'function') {
+          const separateBalances = await kucoinService.getSeparateBalances(baseCurrency)
+          mainBalance = separateBalances.main
+          tradeBalance = separateBalances.trade
+          mainAvailable = separateBalances.mainAvailable
+          tradeAvailable = separateBalances.tradeAvailable
+          totalBalance = mainBalance + tradeBalance
+          availableBalance = mainAvailable + tradeAvailable
+          finalCurrency = baseCurrency
+          
+          console.log('[Balance API] KuCoin separate balances:', {
+            main: mainBalance,
+            trade: tradeBalance,
+            mainAvailable,
+            tradeAvailable
           })
+        } else {
+          // Fallback to old method
+          const baseCurrencyAccounts = accounts.filter(acc => 
+            (acc.currency || '').toUpperCase() === baseCurrency.toUpperCase()
+          )
+          const mainAccount = baseCurrencyAccounts.find(acc => acc.type === 'main')
+          const tradeAccount = baseCurrencyAccounts.find(acc => acc.type === 'trade')
+          
+          mainBalance = mainAccount ? parseFloat(mainAccount.balance || '0') : 0
+          tradeBalance = tradeAccount ? parseFloat(tradeAccount.balance || '0') : 0
+          mainAvailable = mainAccount ? parseFloat(mainAccount.available || '0') : 0
+          tradeAvailable = tradeAccount ? parseFloat(tradeAccount.available || '0') : 0
+          totalBalance = mainBalance + tradeBalance
+          availableBalance = mainAvailable + tradeAvailable
         }
+      } catch (error) {
+        console.error('[Balance API] Error getting separate balances:', error)
+        // Fallback to summing all accounts
+        const baseCurrencyAccounts = accounts.filter(acc => 
+          (acc.currency || '').toUpperCase() === baseCurrency.toUpperCase()
+        )
+        totalBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.balance || '0'), 0)
+        availableBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.available || '0'), 0)
       }
     } else {
-      console.log('[Balance API] No accounts found for base currency, trying fallback')
-      // Fallback: try to get balance for base currency using getBalance method
-      try {
-        availableBalance = await exchange.getBalance(baseCurrency)
-        totalBalance = availableBalance
-        finalCurrency = baseCurrency
-        console.log('[Balance API] Fallback getBalance result:', availableBalance)
-      } catch (error) {
-        console.error(`Error getting balance for ${baseCurrency}:`, error)
-        // Last resort: sum all accounts
-        totalBalance = accounts.reduce((sum, acc) => sum + parseFloat(acc.balance || '0'), 0)
-        availableBalance = accounts.reduce((sum, acc) => sum + parseFloat(acc.available || '0'), 0)
-        console.log('[Balance API] Summed all accounts - total:', totalBalance, 'available:', availableBalance)
+      // For other exchanges (OANDA), use standard method
+      const baseCurrencyAccounts = accounts.filter(acc => 
+        (acc.currency || '').toUpperCase() === baseCurrency.toUpperCase()
+      )
+      
+      if (baseCurrencyAccounts.length > 0) {
+        totalBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.balance || '0'), 0)
+        availableBalance = baseCurrencyAccounts.reduce((sum, acc) => sum + parseFloat(acc.available || '0'), 0)
+      } else {
+        // Fallback: try to get balance using getBalance method
+        try {
+          availableBalance = await exchange.getBalance(baseCurrency)
+          totalBalance = availableBalance
+        } catch (error) {
+          console.error(`Error getting balance for ${baseCurrency}:`, error)
+          totalBalance = accounts.reduce((sum, acc) => sum + parseFloat(acc.balance || '0'), 0)
+          availableBalance = accounts.reduce((sum, acc) => sum + parseFloat(acc.available || '0'), 0)
+        }
       }
     }
 
@@ -109,7 +125,13 @@ export async function GET(request: Request) {
       availableBalance,
       totalBalance,
       exchange: exchange.getName(),
-      // Note: symbol is not included as balance is not symbol-specific
+      // KuCoin-specific: separate balances
+      ...(isKuCoin && {
+        mainBalance,
+        tradeBalance,
+        mainAvailable,
+        tradeAvailable,
+      }),
     })
   } catch (error: unknown) {
     console.error('Error fetching balance:', error)

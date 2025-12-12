@@ -430,6 +430,111 @@ export class OandaService implements ExchangeService {
       return []
     }
   }
+
+  async placeStopLossOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    stopPrice: string,
+    size: string
+  ): Promise<Order> {
+    try {
+      const normalizedSymbol = normalizeSymbol(symbol)
+      // OANDA uses stopLossOnFill in the order request
+      // For an existing position, we'd need to modify the position
+      // For now, we'll create a stop-loss order as a limit order
+      const units = side === 'buy' ? -Math.floor(parseFloat(size)) : Math.floor(parseFloat(size))
+      
+      const response = await fetch(`${this.baseUrl}/accounts/${this.config.accountId}/orders`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          order: {
+            type: 'MARKET_IF_TOUCHED',
+            instrument: normalizedSymbol,
+            units: units.toString(),
+            price: stopPrice,
+            timeInForce: 'GTC',
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(`OANDA API error: ${response.status} - ${errorData.errorMessage || response.statusText}`)
+      }
+
+      const data = await response.json()
+      const order = data.orderCreateTransaction || data.orderFillTransaction
+      
+      return {
+        id: order.id || order.orderID || '',
+        symbol: normalizedSymbol,
+        side: side === 'buy' ? 'sell' : 'buy',
+        type: 'limit',
+        price: stopPrice,
+        size: Math.abs(units).toString(),
+        status: 'pending',
+        createdAt: Math.floor(Date.now() / 1000),
+      }
+    } catch (error) {
+      console.error('OANDA placeStopLossOrder error:', error)
+      throw error
+    }
+  }
+
+  async placeTakeProfitOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    takeProfitPrice: string,
+    size: string
+  ): Promise<Order> {
+    try {
+      const normalizedSymbol = normalizeSymbol(symbol)
+      const units = side === 'buy' ? -Math.floor(parseFloat(size)) : Math.floor(parseFloat(size))
+      
+      const response = await fetch(`${this.baseUrl}/accounts/${this.config.accountId}/orders`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          order: {
+            type: 'LIMIT',
+            instrument: normalizedSymbol,
+            units: units.toString(),
+            price: takeProfitPrice,
+            timeInForce: 'GTC',
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(`OANDA API error: ${response.status} - ${errorData.errorMessage || response.statusText}`)
+      }
+
+      const data = await response.json()
+      const order = data.orderCreateTransaction || data.orderFillTransaction
+      
+      return {
+        id: order.id || order.orderID || '',
+        symbol: normalizedSymbol,
+        side: side === 'buy' ? 'sell' : 'buy',
+        type: 'limit',
+        price: takeProfitPrice,
+        size: Math.abs(units).toString(),
+        status: 'pending',
+        createdAt: Math.floor(Date.now() / 1000),
+      }
+    } catch (error) {
+      console.error('OANDA placeTakeProfitOrder error:', error)
+      throw error
+    }
+  }
 }
 
 export const oandaService = new OandaService()

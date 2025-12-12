@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
+import { tradingBot } from '@/lib/trading-bot'
 
 export async function GET() {
   try {
+    // Ensure bot interval is running if status says it should be (handles hot reloads)
+    await tradingBot.ensureRunning()
+
     let status = await prisma.botStatus.findUnique({
       where: { id: 'main' },
     })

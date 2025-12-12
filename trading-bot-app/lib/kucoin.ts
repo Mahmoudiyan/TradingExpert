@@ -213,14 +213,99 @@ export class KucoinService implements ExchangeService {
   }
 
   // Get account balance for a specific currency
+  // Returns trade account balance (used for trading)
   async getBalance(currency: string): Promise<number> {
     try {
       const accounts = await this.getAccounts(currency)
-      const tradingAccount = accounts.find(acc => acc.type === 'trade')
-      return tradingAccount ? parseFloat(tradingAccount.available) : 0
+      // Filter accounts by currency and get trade account balance
+      const currencyAccounts = accounts.filter(acc => 
+        (acc.currency || '').toUpperCase() === currency.toUpperCase()
+      )
+      
+      // Get trade account balance specifically (required for trading)
+      const tradeAccount = currencyAccounts.find(acc => acc.type === 'trade')
+      const tradeBalance = tradeAccount ? parseFloat(tradeAccount.available || '0') : 0
+      
+      console.log(`[KuCoin getBalance] Currency: ${currency}, Trade Account Balance: ${tradeBalance}`)
+      
+      return tradeBalance
     } catch (error) {
       console.error('Error fetching balance:', error)
       return 0
+    }
+  }
+
+  /**
+   * Get separate balances for main and trade accounts
+   * Returns both main and trade account balances separately
+   */
+  async getSeparateBalances(currency: string): Promise<{ main: number; trade: number; mainAvailable: number; tradeAvailable: number }> {
+    try {
+      const accounts = await this.getAccounts(currency)
+      const currencyAccounts = accounts.filter(acc => 
+        (acc.currency || '').toUpperCase() === currency.toUpperCase()
+      )
+      
+      const mainAccount = currencyAccounts.find(acc => acc.type === 'main')
+      const tradeAccount = currencyAccounts.find(acc => acc.type === 'trade')
+      
+      return {
+        main: mainAccount ? parseFloat(mainAccount.balance || '0') : 0,
+        trade: tradeAccount ? parseFloat(tradeAccount.balance || '0') : 0,
+        mainAvailable: mainAccount ? parseFloat(mainAccount.available || '0') : 0,
+        tradeAvailable: tradeAccount ? parseFloat(tradeAccount.available || '0') : 0,
+      }
+    } catch (error) {
+      console.error('Error fetching separate balances:', error)
+      return { main: 0, trade: 0, mainAvailable: 0, tradeAvailable: 0 }
+    }
+  }
+
+  /**
+   * Transfer funds from main account to trade account
+   * Official API: POST /api/v2/accounts/inner-transfer
+   * Documentation: https://www.kucoin.com/docs-new/rest/account/funding/transfer-between-main-sub-or-sub-sub-accounts
+   * 
+   * Transfers funds from main account to trade account for trading
+   */
+  async transferMainToTrade(currency: string, amount: string): Promise<void> {
+    try {
+      console.log(`[KuCoin] Transferring ${amount} ${currency} from main to trade account`)
+      
+      // Get main account ID
+      const accounts = await this.getAccounts(currency)
+      const mainAccount = accounts.find(acc => acc.type === 'main' && (acc.currency || '').toUpperCase() === currency.toUpperCase())
+      const tradeAccount = accounts.find(acc => acc.type === 'trade' && (acc.currency || '').toUpperCase() === currency.toUpperCase())
+      
+      if (!mainAccount || !tradeAccount) {
+        throw new Error(`Could not find main or trade account for ${currency}`)
+      }
+
+      // Use the inner transfer API
+      const response = await API.rest.User.Account.innerTransfer({
+        clientOid: `${Date.now()}`,
+        currency,
+        amount,
+        from: 'main',
+        to: 'trade',
+      })
+      
+      console.log(`[KuCoin] Transfer successful: ${amount} ${currency} from main to trade`)
+      return response.data
+    } catch (error: unknown) {
+      console.error('Error transferring funds:', error)
+      let errorMessage = 'Failed to transfer funds'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      } else if (typeof error === 'object' && error !== null && 'response' in error) {
+        const err = error as { response?: { data?: { msg?: string } } }
+        errorMessage = err.response?.data?.msg || errorMessage
+      }
+      const enhancedError = new Error(errorMessage)
+      if (error instanceof Error) {
+        (enhancedError as Error & { originalError?: unknown }).originalError = error
+      }
+      throw enhancedError
     }
   }
 
@@ -412,6 +497,72 @@ export class KucoinService implements ExchangeService {
     } catch (error) {
       console.error('Error fetching open orders:', error)
       return []
+    }
+  }
+
+  /**
+   * Place stop-loss order
+   * For spot trading, we use a limit order at the stop price
+   * For a buy position, stop-loss is a sell limit order below entry
+   * For a sell position, stop-loss is a buy limit order above entry
+   */
+  async placeStopLossOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    stopPrice: string,
+    size: string
+  ): Promise<Order> {
+    try {
+      // For spot trading, stop-loss is implemented as a limit order
+      // If original position was 'buy', stop-loss is a 'sell' order
+      // If original position was 'sell', stop-loss is a 'buy' order
+      const stopSide = side === 'buy' ? 'sell' : 'buy'
+      
+      const response = await API.rest.Trade.Orders.postOrder({
+        clientOid: `stop-loss-${Date.now()}`,
+        side: stopSide,
+        symbol,
+        type: 'limit',
+        price: stopPrice,
+        size,
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error placing stop-loss order:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Place take-profit order
+   * For spot trading, we use a limit order at the take-profit price
+   * For a buy position, take-profit is a sell limit order above entry
+   * For a sell position, take-profit is a buy limit order below entry
+   */
+  async placeTakeProfitOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    takeProfitPrice: string,
+    size: string
+  ): Promise<Order> {
+    try {
+      // For spot trading, take-profit is implemented as a limit order
+      // If original position was 'buy', take-profit is a 'sell' order
+      // If original position was 'sell', take-profit is a 'buy' order
+      const profitSide = side === 'buy' ? 'sell' : 'buy'
+      
+      const response = await API.rest.Trade.Orders.postOrder({
+        clientOid: `take-profit-${Date.now()}`,
+        side: profitSide,
+        symbol,
+        type: 'limit',
+        price: takeProfitPrice,
+        size,
+      })
+      return response.data
+    } catch (error) {
+      console.error('Error placing take-profit order:', error)
+      throw error
     }
   }
 }
