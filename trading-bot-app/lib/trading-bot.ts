@@ -609,21 +609,12 @@ export class TradingBot {
         },
       })
 
-      // If we have open positions, skip new entries but continue checking
-      // This allows the bot to check for signals even with open positions
-      // (Future: could add position management logic here)
-      if (openTrades.length > 0) {
-        console.log(`[TradingBot] Skipping - ${openTrades.length} open position(s) for ${config.symbol}`)
-        // Log that we're skipping due to open position (but don't stop the bot)
-        await prisma.botLog.create({
-          data: {
-            level: 'info',
-            message: `Skipping new entry - ${openTrades.length} open position(s) for ${config.symbol}`,
-          },
-        })
-        this.isRunning = false
-        return
-      }
+      // Get balance EARLY - before checking spread to avoid unnecessary API calls
+      const exchange = getExchangeForSymbol(config.symbol, config.exchange)
+      
+      // Determine if this is spot trading (no shorting capability)
+      // For now, assume KuCoin and OANDA are spot trading
+      const isSpotTrading = exchange.getName() === 'KuCoin' || exchange.getName() === 'OANDA'
 
       // Get signal
       console.log(`[TradingBot] Checking for signal: ${config.symbol}, MA(${config.fastMA}/${config.slowMA}), ${config.timeframe}`)
@@ -652,6 +643,121 @@ export class TradingBot {
         return
       }
 
+      // SPOT TRADING LOGIC: For spot trading, sell signals should close open buy positions
+      if (isSpotTrading && signal.signal === 'sell' && openTrades.length > 0) {
+        // Check if we have open BUY positions to close
+        const openBuyTrades = openTrades.filter(t => t.side === 'buy')
+        
+        if (openBuyTrades.length > 0 && config.allowSell) {
+          console.log(`[TradingBot] Spot trading: Sell signal detected with ${openBuyTrades.length} open buy position(s) - closing positions`)
+          await prisma.botLog.create({
+            data: {
+              level: 'info',
+              message: `Spot trading: Sell signal - closing ${openBuyTrades.length} open buy position(s) for ${config.symbol}`,
+            },
+          })
+          
+          // Close all open buy positions
+          for (const trade of openBuyTrades) {
+            try {
+              console.log(`[TradingBot] Closing buy trade: ${trade.id}`)
+              
+              // Cancel any active SL/TP orders first
+              try {
+                const openOrders = await exchange.getOpenOrders(trade.symbol)
+                for (const order of openOrders) {
+                  if (order.id) {
+                    await exchange.cancelOrder(order.id)
+                    console.log(`[TradingBot] Cancelled order: ${order.id}`)
+                  }
+                }
+                // Wait for balance to update after cancellation
+                await new Promise(resolve => setTimeout(resolve, 2000))
+              } catch (cancelError) {
+                console.warn(`[TradingBot] Error cancelling orders before close: ${cancelError instanceof Error ? cancelError.message : 'Unknown error'}`)
+              }
+              
+              // Place market sell order to close the buy position
+              const closeSize = trade.size
+              const closeOrder = await exchange.placeMarketOrder(trade.symbol, 'sell', closeSize.toString())
+              
+              if (!closeOrder || !closeOrder.id) {
+                throw new Error('Failed to place close order')
+              }
+              
+              // Fetch order details to get actual fill price
+              await new Promise(resolve => setTimeout(resolve, 500))
+              const orderDetails = await exchange.getOrder(closeOrder.id)
+              
+              // Calculate fill price from order details
+              let closePrice = trade.price // fallback to trade entry price
+              if (orderDetails.price) {
+                closePrice = parseFloat(orderDetails.price)
+              } else if (orderDetails.filledValue && orderDetails.filledSize) {
+                const filledValue = parseFloat(orderDetails.filledValue)
+                const filledSize = parseFloat(orderDetails.filledSize)
+                if (filledSize > 0) {
+                  closePrice = filledValue / filledSize
+                }
+              }
+              
+              // Calculate profit/loss
+              const profit = (closePrice - trade.price) * closeSize
+              const profitPercent = ((closePrice - trade.price) / trade.price) * 100
+              
+              // Update trade status
+              await prisma.trade.update({
+                where: { id: trade.id },
+                data: {
+                  status: 'closed',
+                  closedAt: new Date(),
+                  profit,
+                  profitPercent,
+                  notes: trade.notes 
+                    ? `${trade.notes}; Closed by sell signal`
+                    : 'Closed by sell signal',
+                },
+              })
+              
+              await prisma.botLog.create({
+                data: {
+                  level: 'info',
+                  message: `Closed buy position ${trade.id} on sell signal: Profit ${profit.toFixed(4)} (${profitPercent.toFixed(2)}%)`,
+                  data: { tradeId: trade.id, closePrice, profit, profitPercent },
+                },
+              })
+              
+              console.log(`[TradingBot] Successfully closed trade ${trade.id}`)
+            } catch (closeError) {
+              console.error(`[TradingBot] Error closing trade ${trade.id}:`, closeError)
+              await prisma.botLog.create({
+                data: {
+                  level: 'error',
+                  message: `Failed to close trade ${trade.id} on sell signal: ${closeError instanceof Error ? closeError.message : 'Unknown error'}`,
+                  data: { tradeId: trade.id, error: closeError instanceof Error ? closeError.toString() : String(closeError) },
+                },
+              })
+            }
+          }
+          
+          this.isRunning = false
+          return
+        }
+      }
+      
+      // If we have open positions and it's NOT a spot sell signal to close, skip new entries
+      if (openTrades.length > 0) {
+        console.log(`[TradingBot] Skipping - ${openTrades.length} open position(s) for ${config.symbol}`)
+        await prisma.botLog.create({
+          data: {
+            level: 'info',
+            message: `Skipping new entry - ${openTrades.length} open position(s) for ${config.symbol}`,
+          },
+        })
+        this.isRunning = false
+        return
+      }
+
       // Check if trading is allowed for this direction
       if (signal.signal === 'buy' && !config.allowBuy) {
         console.log('[TradingBot] Buy signal but allowBuy is false')
@@ -663,9 +769,19 @@ export class TradingBot {
         this.isRunning = false
         return
       }
-
-      // Get balance EARLY - before checking spread to avoid unnecessary API calls
-      const exchange = getExchangeForSymbol(config.symbol, config.exchange)
+      
+      // For spot trading: reject sell signals when there are no open positions (can't short)
+      if (isSpotTrading && signal.signal === 'sell' && openTrades.length === 0) {
+        console.log('[TradingBot] Spot trading: Sell signal but no open positions - cannot short, skipping')
+        await prisma.botLog.create({
+          data: {
+            level: 'info',
+            message: 'Spot trading: Sell signal ignored - no open positions to close (cannot short in spot trading)',
+          },
+        })
+        this.isRunning = false
+        return
+      }
       // For forex, use the quote currency; for crypto, use the quote currency (e.g., USDT)
       const baseCurrency = config.symbol.split('-')[1] || config.symbol.split('_')[1] || 'USD'
       console.log(`[TradingBot] Checking balance for ${baseCurrency}`)

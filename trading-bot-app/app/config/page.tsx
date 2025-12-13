@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -42,13 +42,27 @@ interface AccountBalance {
 
 export default function ConfigPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [configs, setConfigs] = useState<BotConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null)
 
   useEffect(() => {
     fetchConfigs()
   }, [])
+
+  // Check for config ID in URL query params (from backtest page)
+  useEffect(() => {
+    const configId = searchParams.get('id')
+    if (configId && !loading) {
+      setSelectedConfigId(configId)
+      // Remove the query parameter from URL after reading it (only if configs are loaded)
+      if (configs.length > 0) {
+        router.replace('/config', { scroll: false })
+      }
+    }
+  }, [searchParams, router, loading, configs])
 
   const fetchConfigs = async () => {
     try {
@@ -80,6 +94,35 @@ export default function ConfigPage() {
     }
   }
 
+  const handleDelete = async (configId: string | undefined) => {
+    if (!configId) {
+      alert('Cannot delete: Configuration ID is missing')
+      return
+    }
+
+    // Confirm deletion
+    if (!confirm('Are you sure you want to delete this configuration? This action cannot be undone.')) {
+      return
+    }
+
+    try {
+      const res = await fetch(`/api/config?id=${configId}`, {
+        method: 'DELETE',
+      })
+      const data = await res.json()
+
+      if (res.ok && data.success) {
+        await fetchConfigs()
+        alert('Configuration deleted successfully!')
+      } else {
+        alert(data.error || 'Error deleting configuration')
+      }
+    } catch (error) {
+      console.error('Error deleting config:', error)
+      alert('Error deleting configuration')
+    }
+  }
+
   const defaultConfig: BotConfig = {
     exchange: 'KuCoin',
     symbol: 'BTC-USDT',
@@ -108,8 +151,14 @@ export default function ConfigPage() {
   }
 
   // Find active config or use default
-  const activeConfig = configs.find(c => c.isActive) || defaultConfig
+  // If a config ID is provided (from backtest), show that config instead
+  const configToShow = selectedConfigId
+    ? configs.find(c => c.id === selectedConfigId) || null
+    : configs.find(c => c.isActive) || defaultConfig
+  
+  const activeConfig = configToShow || defaultConfig
   const hasActiveConfig = configs.some(c => c.isActive)
+  const isShowingSelectedConfig = selectedConfigId !== null && configs.some(c => c.id === selectedConfigId)
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -121,12 +170,19 @@ export default function ConfigPage() {
           </Button>
         </div>
 
-        {/* Show active config if exists, otherwise show default form for creating new config */}
+        {/* Show selected config, active config, or default form for creating new config */}
+        {isShowingSelectedConfig && (
+          <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p className="text-sm text-blue-900 dark:text-blue-100">
+              📋 Showing newly created configuration from backtest. Review and activate when ready.
+            </p>
+          </div>
+        )}
         <ConfigForm 
           config={activeConfig} 
           onSave={handleSave} 
           saving={saving}
-          isNewConfig={!hasActiveConfig}
+          isNewConfig={!hasActiveConfig && !isShowingSelectedConfig}
         />
 
         {/* Show other configs in a collapsed list (optional - can be removed if not needed) */}
@@ -145,16 +201,25 @@ export default function ConfigPage() {
                           {config.timeframe} • MA({config.fastMA}/{config.slowMA}) • Risk: {config.riskPercent}%
                         </div>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          // Activate this config
-                          handleSave({ ...config, isActive: true })
-                        }}
-                      >
-                        Activate
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            // Activate this config
+                            handleSave({ ...config, isActive: true })
+                          }}
+                        >
+                          Activate
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDelete(config.id)}
+                        >
+                          Delete
+                        </Button>
+                      </div>
                     </div>
                   </Card>
                 ))}
@@ -171,6 +236,12 @@ function ConfigForm({ config, onSave, saving, isNewConfig = false }: { config: B
   const [balance, setBalance] = useState<AccountBalance | null>(null)
   const [balanceExchange, setBalanceExchange] = useState<string>(config.exchange || 'KuCoin')
   const [refreshingBalance, setRefreshingBalance] = useState(false)
+  
+  // Update formData when config prop changes (e.g., when a different config is activated)
+  useEffect(() => {
+    setFormData(config)
+    setBalanceExchange(config.exchange || 'KuCoin')
+  }, [config])
   
   // Get symbols filtered by selected exchange
   const availableSymbols = getSymbolsByExchange(formData.exchange || 'KuCoin')

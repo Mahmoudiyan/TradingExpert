@@ -141,8 +141,9 @@ export default function BacktestPage() {
         throw new Error(error.error || 'Failed to create config')
       }
 
+      const createdConfig = await response.json()
       alert('Configuration created successfully! You can activate it in the Config page.')
-      router.push('/config')
+      router.push(`/config?id=${createdConfig.id}`)
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       alert(`Error creating config: ${errorMessage}`)

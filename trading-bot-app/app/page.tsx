@@ -727,9 +727,11 @@ export default function Home() {
             )}
 
             {/* Bot Configuration Settings */}
-            {activeConfig && status?.isRunning && (
+            {activeConfig && (
               <div className="mt-6 pt-6 border-t">
-                <h3 className="text-lg font-semibold mb-4">Active Bot Configuration</h3>
+                <h3 className="text-lg font-semibold mb-4">
+                  {status?.isRunning ? 'Active Bot Configuration' : 'Configuration (Will be used when bot starts)'}
+                </h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground">Exchange</div>
