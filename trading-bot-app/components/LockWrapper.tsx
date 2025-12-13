@@ -15,8 +15,9 @@ export function LockWrapper({ children }: { children: React.ReactNode }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isUnlocking, setIsUnlocking] = useState(false)
-
-  // Reset password field when lock state changes
+  // Reset form state when lock state changes to locked
+  // This is necessary to clear the form when the lock dialog opens
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     if (isLocked) {
       setPassword('')

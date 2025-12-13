@@ -134,7 +134,8 @@ export class TradingBot {
     size: number,
     config: { stopLossPips?: number; takeProfitPips?: number; [key: string]: unknown },
     balance?: number,
-    currency?: string
+    currency?: string,
+    funds?: number // Optional funds parameter for buy orders (KuCoin)
   ) {
     try {
       // Final balance check as safeguard (if balance provided)
@@ -147,23 +148,32 @@ export class TradingBot {
       // Format size according to exchange requirements
       // KuCoin requires specific precision to match baseIncrement
       // For ETH-USDT, typical increment is 0.001 (3 decimals), for smaller values use more precision
-      let formattedSize: string
+      let formattedSize: string | undefined
+      let formattedFunds: string | undefined
+      
       if (exchange.getName() === 'KuCoin') {
-        // Determine appropriate precision based on size
-        // For sizes >= 0.01, use 3 decimals (increment 0.001)
-        // For sizes < 0.01, use 5 decimals (increment 0.00001)
-        // For sizes < 0.001, use 8 decimals
-        let decimals = 3
-        if (size < 0.01) {
-          decimals = 5
+        // For buy orders, if funds is provided, use funds instead of size
+        if (side === 'buy' && funds !== undefined && funds > 0) {
+          // Use funds parameter for buy orders (KuCoin prefers funds for market buy orders)
+          formattedFunds = funds.toFixed(8)
+          console.log(`[TradingBot] Using funds parameter: ${formattedFunds} USDT for buy order`)
+        } else {
+          // Determine appropriate precision based on size
+          // For sizes >= 0.01, use 3 decimals (increment 0.001)
+          // For sizes < 0.01, use 5 decimals (increment 0.00001)
+          // For sizes < 0.001, use 8 decimals
+          let decimals = 3
+          if (size < 0.01) {
+            decimals = 5
+          }
+          if (size < 0.001) {
+            decimals = 8
+          }
+          // Round to nearest increment
+          const multiplier = Math.pow(10, decimals)
+          const rounded = Math.floor(size * multiplier) / multiplier
+          formattedSize = rounded.toFixed(decimals).replace(/\.?0+$/, '') || '0'
         }
-        if (size < 0.001) {
-          decimals = 8
-        }
-        // Round to nearest increment
-        const multiplier = Math.pow(10, decimals)
-        const rounded = Math.floor(size * multiplier) / multiplier
-        formattedSize = rounded.toFixed(decimals).replace(/\.?0+$/, '') || '0'
       } else {
         formattedSize = size.toFixed(8)
       }
@@ -171,7 +181,8 @@ export class TradingBot {
       const order = await exchange.placeMarketOrder(
         symbol,
         side,
-        formattedSize
+        formattedSize,
+        formattedFunds
       )
 
       // Validate order response
@@ -466,6 +477,58 @@ export class TradingBot {
         })
         this.isRunning = false
         return
+      }
+
+      // Check KuCoin minimum order value (0.1 USDT)
+      if (exchange.getName() === 'KuCoin') {
+        const minOrderValue = 0.1 // KuCoin minimum is 0.1 USDT
+        if (tradeCost < minOrderValue) {
+          console.log(`[TradingBot] Order value ${tradeCost} ${baseCurrency} is below KuCoin minimum of ${minOrderValue} USDT`)
+          
+          if (signal.signal === 'sell') {
+            // For sell orders, we can't easily adjust - skip the trade
+            await prisma.botLog.create({
+              data: {
+                level: 'warning',
+                message: `Skipping trade: order value ${tradeCost.toFixed(4)} ${baseCurrency} is below KuCoin minimum of ${minOrderValue} USDT`,
+                data: { calculatedValue: tradeCost, minimumRequired: minOrderValue, positionSize, price: signal.price },
+              },
+            })
+            this.isRunning = false
+            return
+          } else {
+            // For buy orders, we can use funds parameter with minimum value
+            // Adjust to use minimum funds (0.11 USDT to be safe)
+            const adjustedFunds = Math.max(tradeCost, 0.11)
+            if (adjustedFunds > balance) {
+              console.log(`[TradingBot] Cannot meet minimum order size: need ${adjustedFunds} ${baseCurrency}, have ${balance}`)
+              await prisma.botLog.create({
+                data: {
+                  level: 'warning',
+                  message: `Cannot meet KuCoin minimum order size: need ${adjustedFunds} ${baseCurrency}, have ${balance} ${baseCurrency}`,
+                  data: { calculatedValue: tradeCost, minimumRequired: minOrderValue, adjustedFunds, balance },
+                },
+              })
+              this.isRunning = false
+              return
+            }
+            // Recalculate position size based on adjusted funds
+            const adjustedSize = adjustedFunds / signal.price
+            console.log(`[TradingBot] Adjusting buy order to meet minimum: using ${adjustedFunds} ${baseCurrency} (size: ${adjustedSize})`)
+            await prisma.botLog.create({
+              data: {
+                level: 'info',
+                message: `Adjusting buy order to meet KuCoin minimum: ${adjustedFunds} ${baseCurrency} (calculated: ${tradeCost.toFixed(4)})`,
+                data: { originalValue: tradeCost, adjustedValue: adjustedFunds, originalSize: positionSize, adjustedSize },
+              },
+            })
+            // Execute with adjusted size and funds
+            await this.executeTrade(config.symbol, signal.signal, adjustedSize, config, balance, baseCurrency, adjustedFunds)
+            console.log('[TradingBot] Trade executed successfully')
+            this.isRunning = false
+            return
+          }
+        }
       }
 
       // Execute trade
