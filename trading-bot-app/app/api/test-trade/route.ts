@@ -195,6 +195,46 @@ export async function POST(request: Request) {
       }
     }
 
+    // Get active config for SL/TP values
+    const config = await prisma.botConfig.findFirst({
+      where: { isActive: true },
+      orderBy: { updatedAt: 'desc' },
+    })
+
+    // Check if order is filled by status or by having filled size/value
+    const hasFilledSize = parseFloat(orderDetails.filledSize || '0') > 0
+    const hasFilledValue = parseFloat(orderDetails.filledValue || '0') > 0
+    
+    // Determine final status - update if we have filled data
+    let finalStatus = orderDetails.status || order.status || 'unknown'
+    if ((hasFilledSize || hasFilledValue) && finalStatus === 'unknown') {
+      finalStatus = 'filled'
+    }
+
+    // Calculate SL/TP prices if config exists
+    const stopLossPips = config?.stopLossPips || 30
+    const takeProfitPips = config?.takeProfitPips || 75
+    let stopLossPrice: number | null = null
+    let takeProfitPrice: number | null = null
+
+    if (tradePrice > 0) {
+      if (side === 'buy') {
+        stopLossPrice = tradePrice * (1 - stopLossPips / 10000)
+        takeProfitPrice = tradePrice * (1 + takeProfitPips / 10000)
+      } else {
+        stopLossPrice = tradePrice * (1 + stopLossPips / 10000)
+        takeProfitPrice = tradePrice * (1 - takeProfitPips / 10000)
+      }
+      // Format prices to 2 decimals to match KuCoin's price increment requirements
+      // This prevents floating point precision issues
+      if (stopLossPrice) {
+        stopLossPrice = Math.round(stopLossPrice * 100) / 100
+      }
+      if (takeProfitPrice) {
+        takeProfitPrice = Math.round(takeProfitPrice * 100) / 100
+      }
+    }
+    
     // Save trade to database for tracking
     const trade = await prisma.trade.create({
       data: {
@@ -204,7 +244,9 @@ export async function POST(request: Request) {
         type: 'market',
         price: tradePrice,
         size: tradeSize,
-        status: orderDetails.status || order.status || 'unknown',
+        status: finalStatus,
+        stopLoss: stopLossPrice,
+        takeProfit: takeProfitPrice,
       },
     })
 
@@ -219,6 +261,254 @@ export async function POST(request: Request) {
         data: { orderId, tradeId: trade.id, testTrade: true, funds: formattedFunds, size: formattedSize },
       },
     })
+    
+    // Place SL/TP orders if trade is filled and prices are valid
+    // For market orders placed via API, if we have valid price/size, consider it filled
+    // Market orders execute immediately, so if we have price and size, it's filled
+    const hasValidTradeData = tradePrice > 0 && tradeSize > 0
+    const isFilled = finalStatus === 'filled' || finalStatus === 'done' || 
+                     hasFilledSize || hasFilledValue ||
+                     hasValidTradeData // If we have valid price/size, the order executed
+    
+    console.log(`[Test Trade] isFilled check: finalStatus=${finalStatus}, hasFilledSize=${hasFilledSize}, hasFilledValue=${hasFilledValue}, hasValidTradeData=${hasValidTradeData}, isFilled=${isFilled}`)
+    
+    // Update trade status to 'filled' if it's actually filled but status was 'unknown'
+    if (isFilled && finalStatus === 'unknown') {
+      console.log(`[Test Trade] Updating trade ${trade.id} status from 'unknown' to 'filled'`)
+      await prisma.trade.update({
+        where: { id: trade.id },
+        data: { status: 'filled' },
+      })
+      finalStatus = 'filled'
+    }
+    
+    let slOrderId: string | null = null
+    let tpOrderId: string | null = null
+    let slErrorMsg: string | null = null
+    let tpErrorMsg: string | null = null
+
+    // Check if trade size is large enough for SL/TP orders (KuCoin minimum order value is 0.1 USDT)
+    const estimatedSlTpValue = tradeSize * tradePrice
+    const canPlaceSlTp = estimatedSlTpValue >= 0.1
+
+    if (isFilled && tradePrice > 0 && tradeSize > 0 && stopLossPrice && takeProfitPrice) {
+      if (!canPlaceSlTp) {
+        console.log(`[Test Trade] Skipping SL/TP orders: trade size too small (${tradeSize} = ${estimatedSlTpValue.toFixed(4)} USDT < 0.1 USDT minimum)`)
+        slErrorMsg = `Trade size too small for SL/TP orders (${estimatedSlTpValue.toFixed(4)} USDT < 0.1 USDT minimum)`
+        tpErrorMsg = slErrorMsg
+      } else {
+        console.log(`[Test Trade] Placing SL/TP orders: SL=${stopLossPrice.toFixed(4)}, TP=${takeProfitPrice.toFixed(4)}`)
+        
+        // Place stop-loss order
+        try {
+          // Format price to 2 decimals for KuCoin (already done above, but ensure it's formatted)
+          const formattedSlPrice = exchange.getName() === 'KuCoin'
+            ? stopLossPrice.toFixed(2)
+            : stopLossPrice.toFixed(8)
+          
+          const stopLossOrder = await exchange.placeStopLossOrder(
+            symbol,
+            side as 'buy' | 'sell',
+            formattedSlPrice,
+            tradeSize.toString() // Size will be formatted inside placeStopLossOrder
+          )
+          if (stopLossOrder && (stopLossOrder.id || (stopLossOrder as { orderId?: string }).orderId)) {
+            slOrderId = stopLossOrder.id || (stopLossOrder as { orderId?: string }).orderId || null
+            console.log(`[Test Trade] Stop-loss order placed: ${slOrderId}`)
+          } else {
+            throw new Error(`Invalid response from placeStopLossOrder: ${JSON.stringify(stopLossOrder)}`)
+          }
+          
+          await prisma.botLog.create({
+            data: {
+              level: 'info',
+              message: `Test trade stop-loss order placed: ${slOrderId} at ${stopLossPrice.toFixed(4)}`,
+              data: { tradeId: trade.id, stopLossOrderId: slOrderId, stopLossPrice },
+            },
+          })
+          
+          // Small delay to allow balance to update after SL order placement
+          await new Promise(resolve => setTimeout(resolve, 300))
+        } catch (slError) {
+          console.error(`[Test Trade] Error placing stop-loss order:`, slError)
+          slErrorMsg = slError instanceof Error ? slError.message : 'Unknown error'
+          await prisma.botLog.create({
+            data: {
+              level: 'error',
+              message: `Test trade failed to place stop-loss: ${slErrorMsg}`,
+              data: { tradeId: trade.id, error: slError instanceof Error ? slError.toString() : String(slError) },
+            },
+          })
+        }
+
+        // Place take-profit order
+        try {
+          // Format price to 2 decimals for KuCoin (already done above, but ensure it's formatted)
+          const formattedTpPrice = exchange.getName() === 'KuCoin'
+            ? takeProfitPrice.toFixed(2)
+            : takeProfitPrice.toFixed(8)
+          
+          const takeProfitOrder = await exchange.placeTakeProfitOrder(
+            symbol,
+            side as 'buy' | 'sell',
+            formattedTpPrice,
+            tradeSize.toString() // Size will be formatted inside placeTakeProfitOrder
+          )
+          if (takeProfitOrder && (takeProfitOrder.id || (takeProfitOrder as { orderId?: string }).orderId)) {
+            tpOrderId = takeProfitOrder.id || (takeProfitOrder as { orderId?: string }).orderId || null
+            console.log(`[Test Trade] Take-profit order placed: ${tpOrderId}`)
+          } else {
+            throw new Error(`Invalid response from placeTakeProfitOrder: ${JSON.stringify(takeProfitOrder)}`)
+          }
+          
+          await prisma.botLog.create({
+            data: {
+              level: 'info',
+              message: `Test trade take-profit order placed: ${tpOrderId} at ${takeProfitPrice.toFixed(4)}`,
+              data: { tradeId: trade.id, takeProfitOrderId: tpOrderId, takeProfitPrice },
+            },
+          })
+        } catch (tpError) {
+          console.error(`[Test Trade] Error placing take-profit order:`, tpError)
+          tpErrorMsg = tpError instanceof Error ? tpError.message : 'Unknown error'
+          await prisma.botLog.create({
+            data: {
+              level: 'error',
+              message: `Test trade failed to place take-profit: ${tpErrorMsg}`,
+              data: { tradeId: trade.id, error: tpError instanceof Error ? tpError.toString() : String(tpError) },
+            },
+          })
+        }
+        
+        // SAFETY: If SL failed to place, close the trade immediately (SL is critical)
+        // For spot trading, TP failure is acceptable if SL is placed (balance already reserved)
+        if (!slOrderId) {
+          const errorDetails = [`SL: ${slErrorMsg || 'Unknown error'}`]
+          if (!tpOrderId && tpErrorMsg) errorDetails.push(`TP: ${tpErrorMsg}`)
+          
+          console.error(`[Test Trade] SAFETY: Stop-loss placement failed, closing trade ${trade.id} immediately. Errors: ${errorDetails.join(', ')}`)
+          
+          try {
+            // Try to close the trade immediately
+            const oppositeSide = side === 'buy' ? 'sell' : 'buy'
+            
+            // Check if trade size is sufficient to place closing order
+            const minOrderValue = exchange.getName() === 'KuCoin' ? 0.11 : 0.1
+            if (estimatedSlTpValue >= minOrderValue) {
+              // Format size according to exchange requirements
+              let formattedCloseSize: string | undefined
+              if (exchange.getName() === 'KuCoin') {
+                // Use same logic as main formatting
+                let decimals = 4
+                if (tradeSize >= 0.01) {
+                  decimals = 3
+                } else if (tradeSize < 0.0001) {
+                  decimals = 8
+                } else if (tradeSize < 0.001) {
+                  decimals = 5
+                }
+                const multiplier = Math.pow(10, decimals)
+                const rounded = Math.floor(tradeSize * multiplier) / multiplier
+                formattedCloseSize = rounded.toFixed(decimals).replace(/\.?0+$/, '') || '0'
+              } else {
+                formattedCloseSize = tradeSize.toFixed(8)
+              }
+              
+              const closeOrder = await exchange.placeMarketOrder(
+                symbol,
+                oppositeSide,
+                formattedCloseSize
+              )
+              
+              // Update trade status
+              await prisma.trade.update({
+                where: { id: trade.id },
+                data: {
+                  status: 'closed',
+                  closedAt: new Date(),
+                  notes: `Auto-closed: Stop-loss placement failed (${errorDetails.join(', ')})`,
+                },
+              })
+              
+              console.log(`[Test Trade] Trade ${trade.id} closed successfully due to SL/TP failure`)
+              
+              await prisma.botLog.create({
+                data: {
+                  level: 'warning',
+                  message: `Test trade ${trade.id} auto-closed due to SL/TP placement failure`,
+                  data: { tradeId: trade.id, closeOrderId: closeOrder.id },
+                },
+              })
+            } else {
+              // Trade too small to close - just mark as closed manually
+              await prisma.trade.update({
+                where: { id: trade.id },
+                data: {
+                  status: 'closed',
+                  closedAt: new Date(),
+                  notes: `Auto-closed (no order): Trade size too small for closing order (${estimatedSlTpValue.toFixed(4)} < ${minOrderValue} minimum). Stop-loss failed: ${errorDetails.join(', ')}`,
+                },
+              })
+              
+              console.log(`[Test Trade] Trade ${trade.id} marked as closed (size too small to place closing order)`)
+            }
+          } catch (closeError) {
+            console.error(`[Test Trade] Error closing trade ${trade.id}:`, closeError)
+            // If closing also fails, still mark as closed with error note
+            await prisma.trade.update({
+              where: { id: trade.id },
+              data: {
+                status: 'closed',
+                closedAt: new Date(),
+                  notes: `Auto-closed (close failed): Stop-loss placement failed (${errorDetails.join(', ')}). Close error: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+              },
+            })
+            
+            await prisma.botLog.create({
+              data: {
+                level: 'error',
+                message: `Test trade ${trade.id} - Failed to close trade after SL/TP failure: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+                data: { tradeId: trade.id, error: closeError instanceof Error ? closeError.toString() : String(closeError) },
+              },
+            })
+          }
+        } else if (!tpOrderId && tpErrorMsg) {
+          // TP failed but SL is placed - this is acceptable for spot trading
+          // Log a warning but don't close the trade (we have SL protection)
+          console.warn(`[Test Trade] Take-profit placement failed but stop-loss is active. This is acceptable for spot trading (balance reserved by SL). TP error: ${tpErrorMsg}`)
+          await prisma.botLog.create({
+            data: {
+              level: 'warning',
+              message: `Test trade: Take-profit order failed to place but stop-loss is active. Trade protected by SL only. TP error: ${tpErrorMsg}`,
+              data: { tradeId: trade.id, slOrderId, tpOrderId, slError: slErrorMsg, tpError: tpErrorMsg },
+            },
+          })
+        }
+      }
+    } else {
+      // Log why SL/TP orders weren't placed with detailed debugging
+      const debugInfo = {
+        isFilled,
+        finalStatus,
+        hasFilledSize,
+        hasFilledValue,
+        tradePrice,
+        tradeSize,
+        stopLossPrice,
+        takeProfitPrice,
+        hasValidPrices: !!(stopLossPrice && takeProfitPrice),
+        hasValidTrade: !!(tradePrice > 0 && tradeSize > 0),
+      }
+      console.log(`[Test Trade] SL/TP orders not placed. Debug info:`, JSON.stringify(debugInfo, null, 2))
+      
+      await prisma.botLog.create({
+        data: {
+          level: 'warning',
+          message: `Test trade SL/TP not placed: isFilled=${isFilled}, hasValidTrade=${debugInfo.hasValidTrade}, hasValidPrices=${debugInfo.hasValidPrices}, status=${finalStatus}`,
+          data: { tradeId: trade.id, ...debugInfo },
+        },
+      })
+    }
 
     return NextResponse.json({
       success: true,
@@ -240,8 +530,14 @@ export async function POST(request: Request) {
         side: trade.side,
         price: trade.price.toFixed(8),
         size: trade.size.toFixed(8),
-        status: trade.status,
+        status: finalStatus, // Use finalStatus which may have been updated to 'filled'
+        stopLoss: stopLossPrice,
+        takeProfit: takeProfitPrice,
       },
+      slOrderId,
+      tpOrderId,
+      slError: slErrorMsg,
+      tpError: tpErrorMsg,
     })
   } catch (error: unknown) {
     console.error('[Test Trade API] Error:', error)

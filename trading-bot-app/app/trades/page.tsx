@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,23 +26,79 @@ export default function TradesPage() {
   const router = useRouter()
   const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)
+  const [closingTradeId, setClosingTradeId] = useState<string | null>(null)
+
+  const fetchTrades = useCallback(async () => {
+    try {
+      const res = await fetch('/api/trades?limit=100', {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      })
+      
+      if (!res.ok) {
+        throw new Error(`Failed to fetch trades: ${res.status} ${res.statusText}`)
+      }
+      
+      const data = await res.json()
+      
+      // Check if response contains an error field (API error)
+      if (data.error) {
+        throw new Error(data.error)
+      }
+      
+      // Ensure data is an array
+      if (Array.isArray(data)) {
+        setTrades(data)
+      } else {
+        console.warn('Unexpected response format:', data)
+        setTrades([])
+      }
+    } catch (error) {
+      console.error('Error fetching trades:', error)
+      // Don't clear trades on error - keep showing last known data
+      // setTrades([]) // Uncomment if you want to clear on error
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     fetchTrades()
     const interval = setInterval(fetchTrades, 10000)
     return () => clearInterval(interval)
-  }, [])
+  }, [fetchTrades])
 
-  const fetchTrades = async () => {
-    try {
-      const res = await fetch('/api/trades?limit=100')
-      const data = await res.json()
-      setTrades(data)
-    } catch (error) {
-      console.error('Error fetching trades:', error)
-    } finally {
-      setLoading(false)
+  const handleCloseTrade = async (tradeId: string) => {
+    if (!confirm('Are you sure you want to close this trade?')) {
+      return
     }
+
+    setClosingTradeId(tradeId)
+    try {
+      const res = await fetch(`/api/trades/${tradeId}/close`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+
+      if (data.success) {
+        // Refresh trades list
+        await fetchTrades()
+        alert('Trade closed successfully!')
+      } else {
+        alert(`Failed to close trade: ${data.error}`)
+      }
+    } catch (error) {
+      console.error('Error closing trade:', error)
+      alert('Error closing trade. Please try again.')
+    } finally {
+      setClosingTradeId(null)
+    }
+  }
+
+  const isTradeOpen = (trade: Trade) => {
+    return trade.status === 'pending' || trade.status === 'filled'
   }
 
   if (loading) {
@@ -83,6 +139,7 @@ export default function TradesPage() {
                       <TableHead>Status</TableHead>
                       <TableHead>Profit</TableHead>
                       <TableHead>Opened</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -126,6 +183,21 @@ export default function TradesPage() {
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {new Date(trade.openedAt).toLocaleString()}
+                        </TableCell>
+                        <TableCell>
+                          {isTradeOpen(trade) && (
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => handleCloseTrade(trade.id)}
+                              disabled={closingTradeId === trade.id}
+                            >
+                              {closingTradeId === trade.id ? 'Closing...' : 'Close'}
+                            </Button>
+                          )}
+                          {!isTradeOpen(trade) && (
+                            <span className="text-muted-foreground text-sm">Closed</span>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

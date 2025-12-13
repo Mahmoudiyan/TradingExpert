@@ -138,12 +138,61 @@ export class TradingBot {
     funds?: number // Optional funds parameter for buy orders (KuCoin)
   ) {
     try {
-      // Final balance check as safeguard (if balance provided)
-      if (balance !== undefined && balance <= 0) {
-        throw new Error(`Cannot execute trade: insufficient balance (${balance} ${currency || 'USD'})`)
+      const exchange = getExchangeForSymbol(symbol, typeof config.exchange === 'string' ? config.exchange : undefined)
+      
+      // CRITICAL: Validate SL/TP configuration exists
+      if (!config.stopLossPips || config.stopLossPips <= 0) {
+        throw new Error('Cannot execute trade: stopLossPips is required and must be greater than 0')
+      }
+      if (!config.takeProfitPips || config.takeProfitPips <= 0) {
+        throw new Error('Cannot execute trade: takeProfitPips is required and must be greater than 0')
       }
 
-      const exchange = getExchangeForSymbol(symbol, typeof config.exchange === 'string' ? config.exchange : undefined)
+      // CRITICAL: Check balance before placing order
+      // If balance not provided, fetch it from exchange
+      let currentBalance = balance
+      if (currentBalance === undefined) {
+        const baseCurrency = symbol.split('-')[1] || symbol.split('_')[1] || 'USD'
+        currentBalance = await exchange.getBalance(baseCurrency)
+        console.log(`[TradingBot] Fetched balance: ${currentBalance} ${baseCurrency}`)
+      }
+      
+      // Verify balance is sufficient
+      if (currentBalance === undefined || currentBalance <= 0) {
+        throw new Error(`Cannot execute trade: insufficient balance (${currentBalance || 0} ${currency || 'USD'})`)
+      }
+
+      // Calculate trade cost to verify we have enough balance
+      const ticker = await exchange.getTicker(symbol)
+      const currentPrice = parseFloat(ticker.price || ticker.bestAsk || '0')
+      if (currentPrice <= 0) {
+        throw new Error(`Cannot get valid price for ${symbol}`)
+      }
+      
+      // For buy orders, check if we have enough funds
+      if (side === 'buy') {
+        const tradeCost = funds !== undefined && funds > 0 ? funds : (currentPrice * size)
+        if (currentBalance < tradeCost) {
+          throw new Error(`Insufficient balance: need ${tradeCost} ${currency || 'USD'}, have ${currentBalance} ${currency || 'USD'}`)
+        }
+        console.log(`[TradingBot] Balance check passed: ${currentBalance} ${currency || 'USD'} >= ${tradeCost} ${currency || 'USD'}`)
+      } else {
+        // For sell orders, check if we have enough base currency (size)
+        // Note: For spot trading, we'd need to check base currency balance
+        // This is a simplified check - in practice, you'd check base currency balance
+        console.log(`[TradingBot] Sell order balance check: sufficient base currency assumed`)
+      }
+      
+      // SAFETY: Pre-validate that trade size will be sufficient for SL/TP orders
+      // This prevents placing trades that can't be protected
+      const estimatedTradeValue = funds !== undefined && funds > 0 ? funds : (currentPrice * size)
+      const minOrderValue = exchange.getName() === 'KuCoin' ? 0.11 : 0.1 // KuCoin minimum is 0.1 USDT, use 0.11 for safety
+      
+      if (estimatedTradeValue < minOrderValue) {
+        throw new Error(`Trade size too small: ${estimatedTradeValue.toFixed(4)} ${currency || 'USD'} is below minimum ${minOrderValue} ${currency || 'USD'} required for SL/TP orders. Cannot execute unprotected trade.`)
+      }
+      
+      console.log(`[TradingBot] Pre-validation: Trade size ${estimatedTradeValue.toFixed(4)} ${currency || 'USD'} meets minimum ${minOrderValue} ${currency || 'USD'} for SL/TP orders`)
       
       // Format size according to exchange requirements
       // KuCoin requires specific precision to match baseIncrement
@@ -226,6 +275,35 @@ export class TradingBot {
         }
       }
 
+      // Verify order is filled before placing SL/TP
+      const orderStatus = orderDetails.status || order.status || 'unknown'
+      // Check if order is filled by status or by having filled size/value
+      const hasFilledSize = parseFloat(orderDetails.filledSize || '0') > 0
+      const hasFilledValue = parseFloat(orderDetails.filledValue || '0') > 0
+      const isFilled = orderStatus === 'filled' || orderStatus === 'done' || 
+                       hasFilledSize || (hasFilledValue && actualPrice > 0) ||
+                       (actualPrice > 0 && actualSize > 0)
+
+      if (!isFilled) {
+        console.warn(`[TradingBot] Order ${orderId} not yet filled, status: ${orderStatus}`)
+      }
+
+      // Calculate stop-loss and take-profit prices
+      const stopLossPips = config.stopLossPips || 30
+      const takeProfitPips = config.takeProfitPips || 75
+      let stopLossPrice: number | null = null
+      let takeProfitPrice: number | null = null
+
+      if (side === 'buy') {
+        // For buy positions: stop-loss below entry, take-profit above entry
+        stopLossPrice = actualPrice * (1 - stopLossPips / 10000)
+        takeProfitPrice = actualPrice * (1 + takeProfitPips / 10000)
+      } else {
+        // For sell positions: stop-loss above entry, take-profit below entry
+        stopLossPrice = actualPrice * (1 + stopLossPips / 10000)
+        takeProfitPrice = actualPrice * (1 - takeProfitPips / 10000)
+      }
+
       // Save trade to database with actual filled price and size
       const trade = await prisma.trade.create({
         data: {
@@ -235,7 +313,9 @@ export class TradingBot {
           type: 'market',
           price: actualPrice,
           size: actualSize,
-          status: orderDetails.status || order.status || 'unknown',
+          status: orderStatus,
+          stopLoss: stopLossPrice,
+          takeProfit: takeProfitPrice,
         },
       })
 
@@ -247,6 +327,202 @@ export class TradingBot {
           data: { orderId: orderId, tradeId: trade.id, requestedSize: size, filledSize: actualSize, filledPrice: actualPrice },
         },
       })
+
+      // CRITICAL: Place SL/TP orders immediately after main order is filled
+      // For spot trading, we can't place both SL and TP simultaneously (same balance)
+      // Strategy: Place SL first (most important for protection), then try TP
+      // If TP fails due to balance, that's acceptable - we have SL protection
+      if (isFilled && actualPrice > 0 && actualSize > 0) {
+        console.log(`[TradingBot] Placing SL/TP orders for trade ${trade.id}: SL=${stopLossPrice?.toFixed(4)}, TP=${takeProfitPrice?.toFixed(4)}`)
+        
+        let slPlaced = false
+        let tpPlaced = false
+        let slError: Error | null = null
+        let tpError: Error | null = null
+        
+        // Check if trade size is sufficient for SL/TP orders (KuCoin minimum is 0.1 USDT)
+        const estimatedSlTpValue = actualSize * actualPrice
+        const minOrderValue = exchange.getName() === 'KuCoin' ? 0.11 : 0.1 // Use 0.11 for safety margin
+        const canPlaceSlTp = estimatedSlTpValue >= minOrderValue
+        
+        if (!canPlaceSlTp) {
+          const errorMsg = `Trade size too small for SL/TP orders (${estimatedSlTpValue.toFixed(4)} < ${minOrderValue} minimum)`
+          console.error(`[TradingBot] ${errorMsg}`)
+          slError = new Error(errorMsg)
+          tpError = new Error(errorMsg)
+        } else {
+          // Place stop-loss order first (highest priority for protection)
+          try {
+            // Format price to 2 decimals for KuCoin
+            const formattedSlPrice = exchange.getName() === 'KuCoin' 
+              ? (Math.round(stopLossPrice * 100) / 100).toFixed(2)
+              : stopLossPrice.toFixed(8)
+            
+            const stopLossOrder = await exchange.placeStopLossOrder(
+              symbol,
+              side as 'buy' | 'sell',
+              formattedSlPrice,
+              actualSize.toFixed(8)
+            )
+            console.log(`[TradingBot] Stop-loss order placed: ${stopLossOrder.id} at ${formattedSlPrice}`)
+            slPlaced = true
+            
+            await prisma.botLog.create({
+              data: {
+                level: 'info',
+                message: `Stop-loss order placed: ${stopLossOrder.id} for ${symbol} at ${formattedSlPrice}`,
+                data: { tradeId: trade.id, stopLossOrderId: stopLossOrder.id, stopLossPrice },
+              },
+            })
+            
+            // Small delay to allow balance to update after SL order placement (for spot trading)
+            await new Promise(resolve => setTimeout(resolve, 300))
+          } catch (error) {
+            slError = error instanceof Error ? error : new Error(String(error))
+            console.error(`[TradingBot] Error placing stop-loss order:`, slError)
+            await prisma.botLog.create({
+              data: {
+                level: 'error',
+                message: `Failed to place stop-loss order: ${slError.message}`,
+                data: { tradeId: trade.id, error: slError.toString() },
+              },
+            })
+          }
+
+          // Place take-profit order (for spot trading, this may fail if SL already reserved balance)
+          // That's acceptable - SL is more important for protection
+          try {
+            // Format price to 2 decimals for KuCoin
+            const formattedTpPrice = exchange.getName() === 'KuCoin'
+              ? (Math.round(takeProfitPrice * 100) / 100).toFixed(2)
+              : takeProfitPrice.toFixed(8)
+            
+            const takeProfitOrder = await exchange.placeTakeProfitOrder(
+              symbol,
+              side as 'buy' | 'sell',
+              formattedTpPrice,
+              actualSize.toFixed(8)
+            )
+            console.log(`[TradingBot] Take-profit order placed: ${takeProfitOrder.id} at ${formattedTpPrice}`)
+            tpPlaced = true
+            
+            await prisma.botLog.create({
+              data: {
+                level: 'info',
+                message: `Take-profit order placed: ${takeProfitOrder.id} for ${symbol} at ${formattedTpPrice}`,
+                data: { tradeId: trade.id, takeProfitOrderId: takeProfitOrder.id, takeProfitPrice },
+              },
+            })
+          } catch (error) {
+            tpError = error instanceof Error ? error : new Error(String(error))
+            console.error(`[TradingBot] Error placing take-profit order:`, tpError)
+            await prisma.botLog.create({
+              data: {
+                level: 'error',
+                message: `Failed to place take-profit order: ${tpError.message}`,
+                data: { tradeId: trade.id, error: tpError.toString() },
+              },
+            })
+          }
+        }
+        
+        // SAFETY: If SL failed to place, close the trade immediately (SL is critical for protection)
+        // For spot trading, TP failure is acceptable if SL is placed (balance already reserved)
+        if (!slPlaced) {
+          const errorDetails = [`SL: ${slError?.message || 'Unknown error'}`]
+          if (!tpPlaced && tpError) errorDetails.push(`TP: ${tpError.message}`)
+          
+          console.error(`[TradingBot] SAFETY: Stop-loss placement failed, closing trade ${trade.id} immediately. Errors: ${errorDetails.join(', ')}`)
+          
+          await prisma.botLog.create({
+            data: {
+              level: 'error',
+              message: `SAFETY: Closing trade ${trade.id} - Stop-loss order failed to place: ${errorDetails.join(', ')}`,
+              data: { tradeId: trade.id, slPlaced, tpPlaced, slError: slError?.message, tpError: tpError?.message },
+            },
+          })
+          
+          try {
+            // Try to close the trade immediately
+            const oppositeSide = side === 'buy' ? 'sell' : 'buy'
+            
+            // Check if trade size is sufficient to place closing order
+            if (estimatedSlTpValue >= minOrderValue) {
+              const closeOrder = await exchange.placeMarketOrder(
+                symbol,
+                oppositeSide,
+                actualSize.toFixed(8)
+              )
+              
+              // Update trade status
+              await prisma.trade.update({
+                where: { id: trade.id },
+                data: {
+                  status: 'closed',
+                  closedAt: new Date(),
+                  notes: `Auto-closed: SL/TP placement failed (${errorDetails.join(', ')})`,
+                },
+              })
+              
+              console.log(`[TradingBot] Trade ${trade.id} closed successfully due to SL/TP failure`)
+              
+              await prisma.botLog.create({
+                data: {
+                  level: 'warning',
+                  message: `Trade ${trade.id} auto-closed due to SL/TP placement failure`,
+                  data: { tradeId: trade.id, closeOrderId: closeOrder.id },
+                },
+              })
+            } else {
+              // Trade too small to close - just mark as closed manually
+              await prisma.trade.update({
+                where: { id: trade.id },
+                data: {
+                  status: 'closed',
+                  closedAt: new Date(),
+                  notes: `Auto-closed (no order): Trade size too small for closing order (${estimatedSlTpValue.toFixed(4)} < ${minOrderValue} minimum). SL/TP failed: ${errorDetails.join(', ')}`,
+                },
+              })
+              
+              console.log(`[TradingBot] Trade ${trade.id} marked as closed (size too small to place closing order)`)
+            }
+            
+            // Throw error to indicate trade was closed due to SL/TP failure
+            throw new Error(`Trade closed due to SL/TP placement failure: ${errorDetails.join(', ')}`)
+          } catch (closeError) {
+            console.error(`[TradingBot] Error closing trade ${trade.id}:`, closeError)
+            await prisma.botLog.create({
+              data: {
+                level: 'error',
+                message: `Failed to close trade ${trade.id} after stop-loss failure: ${closeError instanceof Error ? closeError.message : String(closeError)}`,
+                data: { tradeId: trade.id, error: closeError instanceof Error ? closeError.toString() : String(closeError) },
+              },
+            })
+            // Still throw the original error
+            throw new Error(`Trade executed but stop-loss placement failed and could not close trade: ${errorDetails.join(', ')}`)
+          }
+        } else if (!tpPlaced && tpError) {
+          // TP failed but SL is placed - this is acceptable for spot trading
+          // Log a warning but don't close the trade (we have SL protection)
+          console.warn(`[TradingBot] Take-profit placement failed but stop-loss is active. This is acceptable for spot trading (balance reserved by SL). TP error: ${tpError.message}`)
+          await prisma.botLog.create({
+            data: {
+              level: 'warning',
+              message: `Take-profit order failed to place but stop-loss is active. Trade protected by SL only. TP error: ${tpError.message}`,
+              data: { tradeId: trade.id, slPlaced, tpPlaced, slError: slError?.message, tpError: tpError.message },
+            },
+          })
+        }
+      } else {
+        console.warn(`[TradingBot] Order not filled yet, skipping SL/TP placement for now`)
+        await prisma.botLog.create({
+          data: {
+            level: 'warning',
+            message: `Order ${orderId} not filled yet (status: ${orderStatus}), SL/TP orders will be placed when order fills`,
+            data: { tradeId: trade.id, orderId, orderStatus },
+          },
+        })
+      }
 
       return { success: true, trade, order }
     } catch (error: unknown) {
@@ -298,6 +574,32 @@ export class TradingBot {
       }
 
       console.log(`[TradingBot] Active config: ${config.symbol} on ${config.exchange}, timeframe: ${config.timeframe}`)
+
+      // CRITICAL: Validate SL/TP configuration before proceeding
+      if (!config.stopLossPips || config.stopLossPips <= 0) {
+        console.log('[TradingBot] Invalid configuration: stopLossPips is required and must be greater than 0')
+        await prisma.botLog.create({
+          data: {
+            level: 'error',
+            message: 'Cannot trade: stopLossPips is required and must be greater than 0',
+            data: { configId: config.id, stopLossPips: config.stopLossPips },
+          },
+        })
+        this.isRunning = false
+        return
+      }
+      if (!config.takeProfitPips || config.takeProfitPips <= 0) {
+        console.log('[TradingBot] Invalid configuration: takeProfitPips is required and must be greater than 0')
+        await prisma.botLog.create({
+          data: {
+            level: 'error',
+            message: 'Cannot trade: takeProfitPips is required and must be greater than 0',
+            data: { configId: config.id, takeProfitPips: config.takeProfitPips },
+          },
+        })
+        this.isRunning = false
+        return
+      }
 
       // Check if we have open positions
       const openTrades = await prisma.trade.findMany({

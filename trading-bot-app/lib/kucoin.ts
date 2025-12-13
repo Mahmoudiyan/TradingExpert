@@ -131,6 +131,45 @@ export interface KucoinAccountSummary {
 
 import type { ExchangeService, Account, Order, Kline, Ticker } from './exchange/interface'
 
+/**
+ * Format price to match KuCoin's price increment requirements
+ * For most major pairs like ETH-USDT, price increment is 0.01 (2 decimals)
+ */
+function formatPriceForKucoin(price: number, symbol: string): string {
+  // Default to 2 decimals for major pairs
+  // This can be enhanced later to fetch actual tick size from symbol info
+  const decimals = 2
+  const multiplier = Math.pow(10, decimals)
+  const rounded = Math.round(price * multiplier) / multiplier
+  return rounded.toFixed(decimals)
+}
+
+/**
+ * Format size to match KuCoin's baseIncrement requirements
+ * For ETH-USDT, baseIncrement is typically 0.0001 (4 decimals)
+ * For smaller values, use more precision (5 or 8 decimals)
+ */
+function formatSizeForKucoin(size: number, symbol: string): string {
+  // For ETH-USDT, baseIncrement is 0.0001 (4 decimals)
+  // For values >= 0.01, use 3 decimals (increment 0.001)
+  // For values < 0.01, use 4 decimals (increment 0.0001)
+  // For values < 0.001, use 5 decimals (increment 0.00001)
+  // For values < 0.0001, use 8 decimals
+  let decimals = 4 // Default for ETH-USDT (baseIncrement 0.0001)
+  if (size >= 0.01) {
+    decimals = 3
+  } else if (size < 0.0001) {
+    decimals = 8
+  } else if (size < 0.001) {
+    decimals = 5
+  }
+  
+  const multiplier = Math.pow(10, decimals)
+  // Round down to nearest increment (floor) to ensure we don't exceed available balance
+  const rounded = Math.floor(size * multiplier) / multiplier
+  return rounded.toFixed(decimals).replace(/\.?0+$/, '') || '0'
+}
+
 export class KucoinService implements ExchangeService {
   getName(): string {
     return 'KuCoin'
@@ -487,11 +526,35 @@ export class KucoinService implements ExchangeService {
    */
   async getOrder(orderId: string): Promise<Order> {
     try {
-      const response = await API.rest.Trade.Orders.getOrder({ orderId })
-      return response.data
+      // Use getOrders with status filter to find the specific order
+      // This is more reliable than trying to guess the method name
+      const response = await API.rest.Trade.Orders.getOrders({
+        status: 'active', // Try active first
+      })
+      
+      if (response && response.data && response.data.items) {
+        const order = response.data.items.find((o: { id?: string; orderId?: string }) => 
+          (o.id === orderId || o.orderId === orderId)
+        )
+        if (order) {
+          return {
+            ...order,
+            id: order.orderId || order.id,
+          }
+        }
+      }
+      
+      // If not found in active, try getting recent orders without status filter
+      // Note: This is a fallback and might not work for all orders
+      throw new Error(`Order ${orderId} not found in active orders. KuCoin SDK does not support direct order lookup by ID.`)
     } catch (error) {
       console.error('Error fetching order:', error)
-      throw error
+      // If the error is already an Error object, re-throw it
+      if (error instanceof Error) {
+        throw error
+      }
+      // Otherwise wrap it
+      throw new Error(`Failed to fetch order: ${String(error)}`)
     }
   }
 
@@ -533,18 +596,59 @@ export class KucoinService implements ExchangeService {
       // If original position was 'sell', stop-loss is a 'buy' order
       const stopSide = side === 'buy' ? 'sell' : 'buy'
       
+      // Format price to match KuCoin's price increment requirements
+      const formattedPrice = formatPriceForKucoin(parseFloat(stopPrice), symbol)
+      // Format size to match KuCoin's baseIncrement requirements
+      const formattedSize = formatSizeForKucoin(parseFloat(size), symbol)
+      
       const response = await API.rest.Trade.Orders.postOrder({
         clientOid: `stop-loss-${Date.now()}`,
         side: stopSide,
         symbol,
         type: 'limit',
-        price: stopPrice,
-        size,
+        price: formattedPrice,
+        size: formattedSize,
       })
-      return response.data
+      
+      if (!response) {
+        throw new Error(`KuCoin API returned invalid response: ${JSON.stringify(response)}`)
+      }
+      
+      // Check if response contains an error (error responses have code/msg)
+      if (!response || !response.data) {
+        throw new Error(`KuCoin API returned invalid response: ${JSON.stringify(response)}`)
+      }
+      
+      // Check if this is an error response (has code/msg but no orderId/id)
+      if (response.data.code || (response.data.msg && !response.data.orderId && !response.data.id)) {
+        const errorMsg = response.data.msg || `Error code: ${response.data.code || 'unknown'}`
+        throw new Error(`KuCoin API error: ${errorMsg}`)
+      }
+      
+      // Validate we have order data
+      if (!response.data.orderId && !response.data.id) {
+        throw new Error(`KuCoin API returned response without order ID: ${JSON.stringify(response.data)}`)
+      }
+      
+      // Normalize KuCoin response to match Order interface
+      const orderData = response.data
+      return {
+        ...orderData,
+        id: orderData.orderId || orderData.id,
+      }
     } catch (error) {
       console.error('Error placing stop-loss order:', error)
-      throw error
+      // If it's already an Error with a message, re-throw it
+      if (error instanceof Error) {
+        throw error
+      }
+      // If it's an object with error info, extract it
+      if (typeof error === 'object' && error !== null) {
+        const err = error as { response?: { data?: { msg?: string; code?: string } }; data?: { msg?: string; code?: string }; msg?: string }
+        const errorMsg = err.response?.data?.msg || err.data?.msg || err.msg || JSON.stringify(error)
+        throw new Error(`KuCoin API error: ${errorMsg}`)
+      }
+      throw new Error(`Unknown error: ${String(error)}`)
     }
   }
 
@@ -566,18 +670,59 @@ export class KucoinService implements ExchangeService {
       // If original position was 'sell', take-profit is a 'buy' order
       const profitSide = side === 'buy' ? 'sell' : 'buy'
       
+      // Format price to match KuCoin's price increment requirements
+      const formattedPrice = formatPriceForKucoin(parseFloat(takeProfitPrice), symbol)
+      // Format size to match KuCoin's baseIncrement requirements
+      const formattedSize = formatSizeForKucoin(parseFloat(size), symbol)
+      
       const response = await API.rest.Trade.Orders.postOrder({
         clientOid: `take-profit-${Date.now()}`,
         side: profitSide,
         symbol,
         type: 'limit',
-        price: takeProfitPrice,
-        size,
+        price: formattedPrice,
+        size: formattedSize,
       })
-      return response.data
+      
+      if (!response) {
+        throw new Error(`KuCoin API returned invalid response: ${JSON.stringify(response)}`)
+      }
+      
+      // Check if response contains an error (error responses have code/msg)
+      if (!response || !response.data) {
+        throw new Error(`KuCoin API returned invalid response: ${JSON.stringify(response)}`)
+      }
+      
+      // Check if this is an error response (has code/msg but no orderId/id)
+      if (response.data.code || (response.data.msg && !response.data.orderId && !response.data.id)) {
+        const errorMsg = response.data.msg || `Error code: ${response.data.code || 'unknown'}`
+        throw new Error(`KuCoin API error: ${errorMsg}`)
+      }
+      
+      // Validate we have order data
+      if (!response.data.orderId && !response.data.id) {
+        throw new Error(`KuCoin API returned response without order ID: ${JSON.stringify(response.data)}`)
+      }
+      
+      // Normalize KuCoin response to match Order interface
+      const orderData = response.data
+      return {
+        ...orderData,
+        id: orderData.orderId || orderData.id,
+      }
     } catch (error) {
       console.error('Error placing take-profit order:', error)
-      throw error
+      // If it's already an Error with a message, re-throw it
+      if (error instanceof Error) {
+        throw error
+      }
+      // If it's an object with error info, extract it
+      if (typeof error === 'object' && error !== null) {
+        const err = error as { response?: { data?: { msg?: string; code?: string } }; data?: { msg?: string; code?: string }; msg?: string }
+        const errorMsg = err.response?.data?.msg || err.data?.msg || err.msg || JSON.stringify(error)
+        throw new Error(`KuCoin API error: ${errorMsg}`)
+      }
+      throw new Error(`Unknown error: ${String(error)}`)
     }
   }
 }

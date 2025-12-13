@@ -121,8 +121,10 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json({
+      success: true,
       balance: availableBalance,
       currency: finalCurrency,
+      available: availableBalance,
       availableBalance,
       totalBalance,
       exchange: exchange.getName(),
