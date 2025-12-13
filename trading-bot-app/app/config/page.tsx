@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -40,7 +40,7 @@ interface AccountBalance {
   exchange: string
 }
 
-export default function ConfigPage() {
+function ConfigPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [configs, setConfigs] = useState<BotConfig[]>([])
@@ -658,5 +658,17 @@ function ConfigForm({ config, onSave, saving, isNewConfig = false }: { config: B
         </form>
       </CardContent>
     </Card>
+  )
+}
+
+export default function ConfigPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-foreground">Loading...</div>
+      </div>
+    }>
+      <ConfigPageContent />
+    </Suspense>
   )
 }
