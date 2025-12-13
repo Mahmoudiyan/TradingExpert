@@ -10,20 +10,19 @@ const Module = require('module')
 const originalRequire = Module.prototype.require
 
 Module.prototype.require = function(id: string) {
-  // When SDK requires 'node-fetch', intercept and return our shim
-  if (id === 'node-fetch' || id.endsWith('node-fetch')) {
-    try {
-      // Try to require our shim first
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const shimPath = require.resolve('../lib/node-fetch-shim.js')
-        const shimFetch = originalRequire.call(this, shimPath)
-        if (typeof shimFetch === 'function') {
-          return shimFetch
-        }
-      } catch (shimError) {
-        // Shim not found, fall back to original
-      }
+      // When SDK requires 'node-fetch', intercept and return our shim
+      if (id === 'node-fetch' || id.endsWith('node-fetch')) {
+        try {
+          // Try to require our shim first
+          try {
+            const shimPath = require.resolve('../lib/node-fetch-shim.js')
+            const shimFetch = originalRequire.call(this, shimPath)
+            if (typeof shimFetch === 'function') {
+              return shimFetch
+            }
+          } catch {
+            // Shim not found, fall back to original
+          }
       
       // Fallback to original node-fetch
       const nodeFetch = originalRequire.call(this, id)

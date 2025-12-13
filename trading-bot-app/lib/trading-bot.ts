@@ -122,7 +122,7 @@ export class TradingBot {
       const spreadPercent = ((ask - bid) / mid) * 100
       
       return spreadPercent <= maxSpreadPercent
-    } catch (error) {
+    } catch {
       return false
     }
   }

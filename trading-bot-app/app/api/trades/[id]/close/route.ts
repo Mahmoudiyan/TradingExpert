@@ -157,7 +157,6 @@ export async function POST(
           // Also check if the ETH size itself is too small (below typical minimums)
           if (estimatedCloseValue < 0.11 || trade.size < 0.0001) {
             // Trade size too small to close - update status manually
-            const profit = 0 // No profit/loss for trades too small to close
             const updatedTrade = await prisma.trade.update({
               where: { id: tradeId },
               data: {

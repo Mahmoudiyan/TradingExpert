@@ -231,8 +231,8 @@ export class OandaService implements ExchangeService {
   async placeMarketOrder(
     symbol: string,
     side: 'buy' | 'sell',
-    size?: string,
-    _funds?: string // OANDA doesn't use funds parameter, kept for interface compatibility
+    size?: string
+    // OANDA doesn't use funds parameter, kept for interface compatibility but not used
   ): Promise<Order> {
     try {
       const normalizedSymbol = normalizeSymbol(symbol)

@@ -66,7 +66,6 @@ try {
     // Alternative: Patch the require cache to ensure node-fetch returns our fetch
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Module = require('module')
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const nodeFetchPath = require.resolve('node-fetch')
     // Force the cached version to be our fetch function
     if (Module._cache[nodeFetchPath]) {
@@ -135,7 +134,7 @@ import type { ExchangeService, Account, Order, Kline, Ticker } from './exchange/
  * Format price to match KuCoin's price increment requirements
  * For most major pairs like ETH-USDT, price increment is 0.01 (2 decimals)
  */
-function formatPriceForKucoin(price: number, symbol: string): string {
+function formatPriceForKucoin(price: number): string {
   // Default to 2 decimals for major pairs
   // This can be enhanced later to fetch actual tick size from symbol info
   const decimals = 2
@@ -149,7 +148,7 @@ function formatPriceForKucoin(price: number, symbol: string): string {
  * For ETH-USDT, baseIncrement is typically 0.0001 (4 decimals)
  * For smaller values, use more precision (5 or 8 decimals)
  */
-function formatSizeForKucoin(size: number, symbol: string): string {
+function formatSizeForKucoin(size: number): string {
   // For ETH-USDT, baseIncrement is 0.0001 (4 decimals)
   // For values >= 0.01, use 3 decimals (increment 0.001)
   // For values < 0.01, use 4 decimals (increment 0.0001)
@@ -597,9 +596,9 @@ export class KucoinService implements ExchangeService {
       const stopSide = side === 'buy' ? 'sell' : 'buy'
       
       // Format price to match KuCoin's price increment requirements
-      const formattedPrice = formatPriceForKucoin(parseFloat(stopPrice), symbol)
+      const formattedPrice = formatPriceForKucoin(parseFloat(stopPrice))
       // Format size to match KuCoin's baseIncrement requirements
-      const formattedSize = formatSizeForKucoin(parseFloat(size), symbol)
+      const formattedSize = formatSizeForKucoin(parseFloat(size))
       
       const response = await API.rest.Trade.Orders.postOrder({
         clientOid: `stop-loss-${Date.now()}`,
@@ -671,9 +670,9 @@ export class KucoinService implements ExchangeService {
       const profitSide = side === 'buy' ? 'sell' : 'buy'
       
       // Format price to match KuCoin's price increment requirements
-      const formattedPrice = formatPriceForKucoin(parseFloat(takeProfitPrice), symbol)
+      const formattedPrice = formatPriceForKucoin(parseFloat(takeProfitPrice))
       // Format size to match KuCoin's baseIncrement requirements
-      const formattedSize = formatSizeForKucoin(parseFloat(size), symbol)
+      const formattedSize = formatSizeForKucoin(parseFloat(size))
       
       const response = await API.rest.Trade.Orders.postOrder({
         clientOid: `take-profit-${Date.now()}`,

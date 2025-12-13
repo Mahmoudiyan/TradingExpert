@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useLock } from '@/contexts/LockContext'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
@@ -15,15 +15,19 @@ export function LockWrapper({ children }: { children: React.ReactNode }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isUnlocking, setIsUnlocking] = useState(false)
-  // Reset form state when lock state changes to locked
-  // This is necessary to clear the form when the lock dialog opens
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  const prevIsLockedRef = useRef(isLocked)
+
+  // Reset form state when lock state changes from unlocked to locked
   useEffect(() => {
-    if (isLocked) {
-      setPassword('')
-      setError('')
-      setIsUnlocking(false)
+    if (isLocked && !prevIsLockedRef.current) {
+      // Lock state changed from false to true - reset form
+      queueMicrotask(() => {
+        setPassword('')
+        setError('')
+        setIsUnlocking(false)
+      })
     }
+    prevIsLockedRef.current = isLocked
   }, [isLocked])
 
   // Prevent access to internal pages when locked

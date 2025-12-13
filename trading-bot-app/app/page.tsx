@@ -320,7 +320,7 @@ export default function Home() {
         monitorIntervalRef.current = null
       }
     }
-  }, [status?.isRunning, activeConfig?.timeframe, fetchMonitorData])
+  }, [status?.isRunning, activeConfig, fetchMonitorData])
 
   const handleStart = async () => {
     try {

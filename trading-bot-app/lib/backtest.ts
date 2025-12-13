@@ -345,27 +345,22 @@ export class BacktestService {
         // Check for stop loss or take profit
         let shouldClose = false
         let exitPrice = currentPrice
-            let exitReason = '' // Track exit reason for debugging/logging
 
         if (side === 'buy') {
           if (currentPrice <= stopLoss) {
             shouldClose = true
             exitPrice = stopLoss
-            exitReason = 'stop loss'
           } else if (currentPrice >= takeProfit) {
             shouldClose = true
             exitPrice = takeProfit
-            exitReason = 'take profit'
           }
         } else {
           if (currentPrice >= stopLoss) {
             shouldClose = true
             exitPrice = stopLoss
-            exitReason = 'stop loss'
           } else if (currentPrice <= takeProfit) {
             shouldClose = true
             exitPrice = takeProfit
-            exitReason = 'take profit'
           }
         }
 
@@ -379,30 +374,24 @@ export class BacktestService {
 
             if (side === 'buy' && prevFast >= prevSlow && currFast < currSlow) {
               shouldClose = true
-              exitReason = 'signal reversal'
             } else if (side === 'sell' && prevFast <= prevSlow && currFast > currSlow) {
               shouldClose = true
-              exitReason = 'signal reversal'
             }
           } else if (strategyType === 'mean-reversion') {
             // Close mean reversion trades when price returns to middle band
             const bbMiddle = bb.middle[i] || currentPrice
             if (side === 'buy' && currentPrice >= bbMiddle) {
               shouldClose = true
-              exitReason = 'mean reversion target'
             } else if (side === 'sell' && currentPrice <= bbMiddle) {
               shouldClose = true
-              exitReason = 'mean reversion target'
             }
           } else if (strategyType === 'momentum') {
             // Close momentum trades when momentum reverses
             const currentMomentum = i < momentum.length ? momentum[i] : 0
             if (side === 'buy' && currentMomentum < 0) {
               shouldClose = true
-              exitReason = 'momentum reversal'
             } else if (side === 'sell' && currentMomentum > 0) {
               shouldClose = true
-              exitReason = 'momentum reversal'
             }
           }
         }
@@ -507,7 +496,6 @@ export class BacktestService {
           // Sell when price touches upper BB and RSI is overbought
           const bbUpper = bb.upper[i] || currentPrice
           const bbLower = bb.lower[i] || currentPrice
-          const bbMiddle = bb.middle[i] || currentPrice
           const currentRSI = i < rsi.length ? rsi[i] : 50
           
           // Buy signal: price near lower band and RSI oversold
